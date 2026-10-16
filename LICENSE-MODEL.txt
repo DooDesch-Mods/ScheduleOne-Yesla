@@ -1,0 +1,22 @@
+Yesla car model - attribution and licence
+
+Original work: "Tesla 2018 Model 3"
+Author:        Ameer Studio
+Licence:       Creative Commons Attribution 4.0 International (CC BY 4.0)
+               https://creativecommons.org/licenses/by/4.0/
+
+Changes made for the Yesla mod:
+- decimated to three levels of detail (LODs)
+- materials merged and re-textured
+- the "T" emblem replaced by a "Y"
+- scaled to a length of 4.69 m
+- wheels separated from the body
+
+The modified model ships inside Yesla.dll as an embedded resource. It is
+distributed under the same licence, CC BY 4.0.
+
+No endorsement of this mod or of DooDesch by the author, Ameer Studio, or by
+Tesla, Inc. is implied.
+
+"Tesla" and "Model 3" are trademarks of Tesla, Inc. This mod is not affiliated
+with or endorsed by Tesla, Inc.

@@ -1,0 +1,462 @@
+name: Build and Release on Tag
+
+# Push a tag "vX.Y.Z" on the default branch and this builds Release, publishes a GitHub
+# Release, and uploads to Thunderstore + Nexus. Mirrors the Personnel pipeline, plus the GitHub-only Debug zip.
+#
+# One-time setup:
+#   - Private build-libs repo  ${owner}/ScheduleOne-Workspace  must contain:
+#       lib/il2cpp/game        (game managed DLLs incl. Assembly-CSharp, Il2CppScheduleOne.Core, Il2CppFishNet.Runtime,
+#                               Il2CppAstarPathfindingProject, Il2Cppmscorlib, Il2CppSystem, Unity.TextMeshPro,
+#                               Unity.InputSystem, and the Unity modules Yesla references: CoreModule, PhysicsModule,
+#                               AIModule, VehiclesModule, UI, UIModule, AudioModule, ImageConversionModule,
+#                               InputLegacyModule)
+#       lib/il2cpp/melonloader (MelonLoader, 0Harmony, Il2CppInterop.Runtime, Newtonsoft.Json)
+#       lib/il2cpp/s1api       (S1API.Il2Cpp.MelonLoader.dll)
+#       lib/sideload-api       (Sideload.cs - the single-file shim; Sideload itself is never referenced)
+#   - Secrets: WORKSPACE_TOKEN (SSH deploy key for that repo), THUNDERSTORE_TOKEN, NEXUSMODS_API_KEY.
+#   - Repo/org variable NEXUS_FILE_GROUP_ID = the Nexus mod's file group id (the Nexus upload job is skipped
+#     until this is set, so GitHub + Thunderstore releases work immediately).
+#   - thunderstore/icon.png must be exactly 256x256 (Thunderstore requirement).
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version-check.outputs.version }}
+      notes: ${{ steps.changelog.outputs.notes }}
+      mlvscan_badges: ${{ steps.mlvscan.outputs.badges }}
+      notes_bbcode: ${{ steps.changelog.outputs.notes_bbcode }}
+      notes_plain: ${{ steps.changelog.outputs.notes_plain }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout Workspace repository (build libs)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/ScheduleOne-Workspace
+          path: Workspace
+          ssh-key: ${{ secrets.WORKSPACE_TOKEN }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            6.0.x
+            8.0.x
+
+      # The tag is the ONLY place a release version is decided; the csproj keeps a 0.0.0-dev fallback it
+      # never bumps. See Workspace/docs/RELEASE-PROCESS.md, "Versioning". Both checks below run before
+      # anything is built, so a bad tag costs seconds rather than a published artefact.
+      - name: Preflight - tag shape and branch
+        id: version-check
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # The `v*` trigger is a glob, not a pattern check - it also matches v1.2, vNext and v1.2.3-rc1.
+          if [[ ! "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Release tag must be exactly vX.Y.Z, got '$TAG'."
+            exit 1
+          fi
+
+          # A tag on a feature branch would publish a version nobody can reproduce from the default branch.
+          git fetch --no-tags origin "$DEFAULT_BRANCH":"refs/remotes/origin/$DEFAULT_BRANCH"
+          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/$DEFAULT_BRANCH"; then
+            echo "::error::Tag $TAG is not on $DEFAULT_BRANCH. Merge first, then tag the commit on $DEFAULT_BRANCH."
+            exit 1
+          fi
+
+          echo "version=${TAG#v}" >> $GITHUB_OUTPUT
+
+      - name: Extract release notes from CHANGELOG.md
+        id: changelog
+        run: |
+          # Single source of truth is the hand-maintained CHANGELOG.md. Pull out the section for
+          # this version; it is reused for the GitHub release body and the Nexus file description.
+          VERSION="${{ steps.version-check.outputs.version }}"
+          SECTION=$(awk -v v="$VERSION" 'index($0,"## ["v"]")==1{grab=1;next} index($0,"## [")==1{if(grab)exit} grab{print}' CHANGELOG.md)
+          # Fatal, not a warning. This used to fall back to "See CHANGELOG.md for details." and publish that
+          # sentence as the release notes to GitHub, Thunderstore and Nexus at once.
+          if [ -z "$(printf '%s' "$SECTION" | tr -d '[:space:]')" ]; then
+            echo "::error::CHANGELOG.md has no non-empty '## [$VERSION]' section. Write the section, then re-tag."
+            exit 1
+          fi
+          HEADINGS=$(grep -c "^## \[$VERSION\]" CHANGELOG.md || true)
+          if [ "$HEADINGS" != "1" ]; then
+            echo "::error::CHANGELOG.md has $HEADINGS '## [$VERSION]' headings, expected exactly 1."
+            exit 1
+          fi
+          # Markdown notes - GitHub renders Markdown in release bodies.
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$SECTION"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+          # Nexus file descriptions are BBCode, not Markdown, and anything left unconverted shows up on the
+          # page as literal asterisks or bracket-and-paren pairs. This turns the CHANGELOG section into the
+          # subset Nexus renders: **bold**, [text](url), ATX headings, "- " bullets with one level of
+          # nesting, and hard-wrapped paragraphs joined back into one line. Inline-code backticks are
+          # dropped, because Nexus has no inline code and a font tag around a setting name is not worth it.
+          # POSIX awk only - the runner's awk is mawk: no interval expressions, no gensub, no capture groups.
+          BBCODE=$(printf '%s\n' "$SECTION" | awk '
+            function inline(s,   t, m, p, txt, url) {
+              while (match(s, /\*\*[^*]+\*\*/)) {
+                t = substr(s, RSTART + 2, RLENGTH - 4)
+                s = substr(s, 1, RSTART - 1) "[b]" t "[/b]" substr(s, RSTART + RLENGTH)
+              }
+              while (match(s, /\[[^]]+\]\([^)]+\)/)) {
+                m = substr(s, RSTART, RLENGTH)
+                p = index(m, "](")
+                txt = substr(m, 2, p - 2)
+                url = substr(m, p + 2, length(m) - p - 2)
+                s = substr(s, 1, RSTART - 1) "[url=" url "]" txt "[/url]" substr(s, RSTART + RLENGTH)
+              }
+              return s
+            }
+            function flushitem() { if (item != "") { printf "[*]%s\n", inline(item); item = "" } }
+            function flushpara() { if (para != "") { printf "%s\n", inline(para); para = "" } }
+            function setlevel(want) {
+              flushitem()
+              while (lvl > want) { print "[/list]"; lvl-- }
+              while (lvl < want) { print "[list]"; lvl++ }
+            }
+            BEGIN { lvl = 0; item = ""; para = "" }
+            {
+              raw = $0; gsub(/`/, "", raw); sub(/[ \t]+$/, "", raw)
+              if (raw ~ /^[ \t]*$/) { flushitem(); flushpara(); next }
+              if (raw ~ /^#+ /) { flushitem(); flushpara(); setlevel(0); h = raw; sub(/^#+ +/, "", h); printf "[b]%s[/b]\n", inline(h); next }
+              if (raw ~ /^[ \t]*[-*] /) { flushpara(); indent = match(raw, /[^ \t]/) - 1; setlevel(indent >= 2 ? 2 : 1); item = raw; sub(/^[ \t]*[-*] +/, "", item); next }
+              sub(/^[ \t]+/, "", raw)
+              if (item != "") { item = item " " raw; next }
+              setlevel(0)
+              para = (para == "" ? raw : para " " raw)
+            }
+            END { flushitem(); flushpara(); setlevel(0) }')
+          {
+            echo "notes_bbcode<<CHANGELOG_EOF"
+            echo "$BBCODE"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+          # A THIRD rendering, and it is not a duplicate of the one above. Nexus has two fields with two
+          # dialects: the FILE description takes BBCode, and the mod's Changelogs section takes plain text -
+          # it splits on newlines and prints every line verbatim, so BBCode handed to it appears as
+          # "[b]Changed[/b]" and "[*]..." on the page. One entry per line, no markup, headings kept as their
+          # own line. Same POSIX-awk-only constraint as above: the runner's awk is mawk.
+          PLAIN=$(printf '%s\n' "$SECTION" | awk '
+            function inline(s,   t, m, p, txt, url) {
+              while (match(s, /\*\*[^*]+\*\*/)) {
+                t = substr(s, RSTART + 2, RLENGTH - 4)
+                s = substr(s, 1, RSTART - 1) t substr(s, RSTART + RLENGTH)
+              }
+              while (match(s, /\[[^]]+\]\([^)]+\)/)) {
+                m = substr(s, RSTART, RLENGTH)
+                p = index(m, "](")
+                txt = substr(m, 2, p - 2)
+                url = substr(m, p + 2, length(m) - p - 2)
+                s = substr(s, 1, RSTART - 1) txt " (" url ")" substr(s, RSTART + RLENGTH)
+              }
+              return s
+            }
+            function flush() { if (item != "") { printf "%s%s\n", pad, inline(item); item = ""; pad = "" } }
+            BEGIN { item = ""; pad = "" }
+            {
+              raw = $0; gsub(/`/, "", raw); sub(/[ \t]+$/, "", raw)
+              if (raw ~ /^[ \t]*$/) { flush(); next }
+              if (raw ~ /^#+ /) { flush(); h = raw; sub(/^#+ +/, "", h); printf "%s\n", inline(h); next }
+              if (raw ~ /^[ \t]*[-*] /) {
+                flush()
+                indent = match(raw, /[^ \t]/) - 1
+                pad = (indent >= 2 ? "  " : "")
+                item = raw; sub(/^[ \t]*[-*] +/, "", item)
+                next
+              }
+              sub(/^[ \t]+/, "", raw)
+              if (item != "") { item = item " " raw; next }
+              printf "%s\n", inline(raw)
+            }
+            END { flush() }')
+          {
+            echo "notes_plain<<CHANGELOG_EOF"
+            echo "$PLAIN"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build the project (Release, IL2CPP)
+        run: dotnet build Yesla.csproj --configuration Release /p:Version="${{ steps.version-check.outputs.version }}" /p:WorkspaceLibPath="${{ github.workspace }}/Workspace/lib"
+
+      # Scans the DLLs that ship. A file MLVScan would block on a player's machine fails the release here,
+      # before anything is packaged. With the MLVSCAN_API_KEY secret set, the same step publishes an
+      # attestation per DLL and writes its badge into README.md and thunderstore/README.md, so the package
+      # built below carries the badge for exactly the DLL inside it.
+      - name: MLVScan (scan, attest, badge)
+        id: mlvscan
+        env:
+          MLVSCAN_API_KEY: ${{ secrets.MLVSCAN_API_KEY }}
+          MLVSCAN_API_BASE_URL: ${{ vars.MLVSCAN_API_BASE_URL }}
+          MLVSCAN_VERSION: ${{ steps.version-check.outputs.version }}
+          MLVSCAN_SOURCE_URL: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version-check.outputs.version }}
+        run: bash Workspace/tools/ci/mlvscan.sh scan yesla=bin/Release/net6.0/Yesla.dll
+
+      - name: Prepare release directory
+        run: |
+          mkdir -p release
+          cp bin/Release/net6.0/Yesla.dll release/
+          if [ -d "thunderstore" ]; then
+            cp -r thunderstore/* release/ 2>/dev/null || true
+            if [ -f "release/manifest.json" ]; then
+              sed -i "s/\"version_number\": \".*\"/\"version_number\": \"${{ steps.version-check.outputs.version }}\"/" release/manifest.json
+            fi
+          fi
+          # Ship LICENSE + the maintained CHANGELOG inside the package. LICENSE-MODEL.txt is not optional: the car
+          # model is CC BY 4.0, and the credit has to travel with every copy of the DLL that embeds it.
+          [ -f "LICENSE.md" ] && cp LICENSE.md release/ || true
+          cp LICENSE-MODEL.txt release/
+          [ -f "CHANGELOG.md" ] && cp CHANGELOG.md release/ || true
+          # Recreate README.md as UTF-8 without BOM (Thunderstore renders it on the mod page).
+          if [ -f "thunderstore/README.md" ]; then
+            cat thunderstore/README.md | iconv -f UTF-8 -t UTF-8//IGNORE > release/README.md 2>/dev/null || \
+            sed '1s/^\xEF\xBB\xBF//' thunderstore/README.md > release/README.md || \
+            cp thunderstore/README.md release/README.md
+          fi
+
+      - name: Create release ZIP (Thunderstore + GitHub; flat layout with manifest/icon at root)
+        run: cd release && zip -r "../Yesla_${{ steps.version-check.outputs.version }}.zip" . && cd ..
+
+      - name: Upload Release ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yesla
+          path: "Yesla_${{ steps.version-check.outputs.version }}.zip"
+
+      # DEBUG BUILD - GitHub release only, never Thunderstore or Nexus.
+      #
+      # Anyone building against this mod wants the Debug DLL, and building it themselves means cloning this repo
+      # and the private build-libs one first. Shipping it here costs one extra compile and saves every one of
+      # them that detour. It is deliberately NOT on the player channels: it carries developer console commands
+      # and verbose logging, and a player installing it by accident would just make their log noisier and slower.
+      - name: Build the project (Debug, IL2CPP)
+        run: dotnet build Yesla.csproj --configuration Debug /p:Version="${{ steps.version-check.outputs.version }}" /p:WorkspaceLibPath="${{ github.workspace }}/Workspace/lib"
+
+      - name: Package the Debug build
+        run: |
+          mkdir -p debug
+          cp bin/Debug/net6.0/Yesla.dll debug/
+          [ -f "LICENSE.md" ] && cp LICENSE.md debug/ || true
+          cp LICENSE-MODEL.txt debug/
+          (cd debug && zip -r "../Yesla_${{ steps.version-check.outputs.version }}_debug.zip" .)
+
+      - name: Upload Debug ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yesla-debug
+          path: "Yesla_${{ steps.version-check.outputs.version }}_debug.zip"
+
+      # Nexus is installed through Vortex, whose Schedule 1 extension deploys relative to the game root and
+      # maps loose non-.md files at the archive root (manifest.json, icon.png) to a bare "mods" path - which
+      # lands a FILE named "mods" in the game folder, replacing the real Mods DIRECTORY and wiping other mods.
+      # So Nexus gets its own archive: the DLL under a mods/ folder, and none of the Thunderstore-only files.
+      - name: Create Nexus/Vortex ZIP (payload under mods/ so the Schedule 1 Vortex extension installs cleanly)
+        run: |
+          mkdir -p nexus/mods
+          cp release/Yesla.dll nexus/mods/
+          for f in README.md CHANGELOG.md LICENSE.md LICENSE-MODEL.txt; do
+            [ -f "release/$f" ] && cp "release/$f" nexus/ || true
+          done
+          (cd nexus && zip -r "../Yesla_${{ steps.version-check.outputs.version }}_nexus.zip" .)
+
+      - name: Upload Nexus ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yesla-nexus
+          path: "Yesla_${{ steps.version-check.outputs.version }}_nexus.zip"
+
+      # The attestation id changes with every release, so the badge line in the repository README moves with
+      # it. This opens a pull request off main that carries the new line and squash-merges it. The script
+      # merges only a diff that touches nothing but the README files.
+      - name: Merge the MLVScan badge into main
+        if: ${{ steps.mlvscan.outputs.badges != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MLVSCAN_BADGE_LINE: ${{ steps.mlvscan.outputs.badges }}
+          MLVSCAN_VERSION: ${{ steps.version-check.outputs.version }}
+        run: bash Workspace/tools/ci/mlvscan.sh readme-pr
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download built ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Yesla
+
+      - name: Extract DLL from ZIP
+        run: |
+          unzip -q "Yesla_${{ needs.build.outputs.version }}.zip" -d release/
+          ls -la release/
+
+      - name: Download Debug ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Yesla-debug
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          generate_release_notes: true
+          files: |
+            release/Yesla.dll
+            release/LICENSE-MODEL.txt
+            Yesla_${{ needs.build.outputs.version }}_debug.zip
+          body: |
+            ## Changes in ${{ needs.build.outputs.version }}
+
+            **Building a mod on top of Yesla?** `Yesla_${{ needs.build.outputs.version }}_debug.zip` is the same version built in Debug, which turns on its developer console commands and verbose logging. Players want the file above it; you probably want this one.
+
+            ${{ needs.build.outputs.notes }}
+
+            ${{ needs.build.outputs.mlvscan_badges }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Discord renders a `release` webhook as an empty box - no title, no version, no notes. So the embed is
+      # built here, where the version and the changelog section are already known. Skipped when the secret is
+      # not set, so a fork or a repo without the feed just builds and releases.
+      - name: Announce the release in Discord
+        if: ${{ !cancelled() }}
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          VERSION: ${{ needs.build.outputs.version }}
+          NOTES: ${{ needs.build.outputs.notes }}
+          REPO: ${{ github.repository }}
+          NEXUS_MOD_ID: ${{ vars.NEXUS_MOD_ID }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then echo "DISCORD_RELEASE_WEBHOOK is not set - nothing announced."; exit 0; fi
+
+          SHORT="${REPO#*/}"
+          NAME=$(echo "$SHORT" | sed -E 's/^(ScheduleOne|Palworld|Mimesis)-//')
+          [ -f thunderstore/manifest.json ] && NAME=$(jq -r '.name // empty' thunderstore/manifest.json)
+          [ -z "$NAME" ] && NAME="$SHORT"
+
+          LINKS="[GitHub](https://github.com/$REPO/releases/tag/v$VERSION)"
+          if [ -f thunderstore/manifest.json ]; then
+            LINKS="[Thunderstore](https://thunderstore.io/package/DooDesch/$NAME/) · $LINKS"
+          fi
+
+          # NEXUS_MOD_ID is the global uid, game_id * 2^32 + page_id, and the page id is what the URL wants.
+          # Only Schedule I is mapped, so a repo for another game simply goes without the link.
+          if [ -n "$NEXUS_MOD_ID" ]; then
+            GAME_ID=$(( NEXUS_MOD_ID / 4294967296 ))
+            PAGE_ID=$(( NEXUS_MOD_ID % 4294967296 ))
+            if [ "$GAME_ID" = "7381" ]; then
+              LINKS="[Nexus](https://www.nexusmods.com/schedule1/mods/$PAGE_ID) · $LINKS"
+            fi
+          fi
+
+          case "$SHORT" in
+            ScheduleOne-*) FOOTER="Schedule I · $SHORT" ;;
+            Palworld-*)    FOOTER="Palworld · $SHORT" ;;
+            Mimesis-*)     FOOTER="Mimesis · $SHORT" ;;
+            *)             FOOTER="$SHORT" ;;
+          esac
+
+          # jq builds the JSON so a changelog with quotes, backticks or newlines cannot break the payload.
+          jq -n --arg title "$NAME $VERSION" \
+                --arg url "https://github.com/$REPO/releases/tag/v$VERSION" \
+                --arg desc "$NOTES" \
+                --arg icon "https://raw.githubusercontent.com/$REPO/main/thunderstore/icon.png" \
+                --arg links "$LINKS" \
+                --arg foot "$FOOTER" \
+            '{embeds: [{
+                title: $title,
+                url: $url,
+                description: ($desc | if length > 1400 then .[0:1400] + "\n..." else . end),
+                color: 8256434,
+                thumbnail: {url: $icon},
+                fields: [{name: "Get it", value: $links}],
+                footer: {text: $foot}
+             }]}' > payload.json
+
+          curl -sS -f -X POST -H "Content-Type: application/json" -d @payload.json "$WEBHOOK" \
+            && echo "announced $NAME $VERSION"
+
+  thunderstore:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download built ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Yesla
+
+      - name: Extract ZIP for Thunderstore
+        run: |
+          mkdir -p thunderstore-package
+          unzip -q "Yesla_${{ needs.build.outputs.version }}.zip" -d thunderstore-package/
+
+      - name: Upload to Thunderstore
+        uses: GreenTF/upload-thunderstore-package@v4.3
+        with:
+          token: ${{ secrets.THUNDERSTORE_TOKEN }}
+          community: schedule-i
+          repo: thunderstore.io
+          namespace: DooDesch
+          name: Yesla
+          description: Buy the Yesla Model 3 electric sedan at the dealership, send it a destination from your phone and let Yesla Assisted Driving take you there.
+          version: ${{ needs.build.outputs.version }}
+          path: thunderstore-package
+          # Sideload is left out on purpose: it only adds the phone app, and Yesla runs without it.
+          deps: |
+            LavaGang-MelonLoader-0.7.3
+            ifBars-S1API_Forked-3.2.1
+          categories: |
+            Mods
+
+  nexus:
+    needs: build
+    runs-on: ubuntu-latest
+    # Skipped until the Nexus mod page exists and both IDs are set as repo/org variables.
+    if: ${{ vars.NEXUS_FILE_GROUP_ID != '' && vars.NEXUS_MOD_ID != '' }}
+    steps:
+      - name: Download Nexus ZIP
+        uses: actions/download-artifact@v4
+        with:
+          name: Yesla-nexus
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUS_FILE_GROUP_ID }}
+          mod_id: ${{ vars.NEXUS_MOD_ID }}
+          filename: "Yesla_${{ needs.build.outputs.version }}_nexus.zip"
+          version: ${{ needs.build.outputs.version }}
+          display_name: "Yesla ${{ needs.build.outputs.version }}"
+          description: ${{ needs.build.outputs.notes_bbcode }}
+          changelog: ${{ github.event_name == 'push' && github.run_attempt == 1 && needs.build.outputs.notes_plain || '' }}
+          category: main
+          archive_existing_version: true
+          update_mod_version: true
+          primary_mod_manager_download: true
+          allow_mod_manager_download: true
