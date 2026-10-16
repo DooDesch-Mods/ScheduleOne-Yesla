@@ -27,6 +27,7 @@ namespace Yesla.Debugging
             "yesla diag, yesla agentdebug on, yesla engage, yesla stop, yesla clear, yesla spawn hounddog 8, yesla enter, yesla tograph";
 
         private static readonly List<string> _pending = new List<string>();
+        private static UnityEngine.GameObject _overhead;
 
         internal static bool TryHandle(string raw)
         {
@@ -87,6 +88,10 @@ namespace Yesla.Debugging
                         Say("agentdebug [off]   - vanilla agent debug logging (obstacles, speed multipliers)");
                         Say("fleet              - Yesla owners, lock, sentry and running summons");
                         Say("summon / honk / lock / sentry - the phone controls, on the nearest own Yesla");
+                        Say("sharp [post on|off | aa none|fxaa|smaa | bias <n>] - why the phone looks soft");
+                        Say("glass [cast|receive on|off] - the window materials and their shadows");
+                        Say("goto [x y z]       - Go to target: the empty car drives to the destination and parks");
+                        Say("overhead [h|off]   - a camera straight above the car, for parking screenshots");
                         Say("claim [code]       - host: give the nearest Yesla to a player code (default: me)");
                         Say("profile [chill|standard|madmax] - show or set the drive profile (same as the phone)");
                         Say("zones              - every speed zone with its speed and size");
@@ -133,9 +138,24 @@ namespace Yesla.Debugging
                     case "summon":
                     {
                         var car = Phone.YeslaApp.MyCar();
-                        bool coming = car != null && Summon.StatusOf(car).state == SummonState.Coming;
+                        SummonState ss = car != null ? Summon.StatusOf(car).state : SummonState.Off;
+                        bool coming = ss == SummonState.Coming || ss == SummonState.Going;
                         string refused = coming ? Summon.Cancel(car) : Summon.Request(car);
                         Say(refused ?? (coming ? "summon: asked to stop" : "summon: asked to come"));
+                        break;
+                    }
+
+                    case "goto":
+                    {
+                        // Go to target from the console: 'goto' sends the car to the destination already set,
+                        // 'goto <x> <y> <z>' sets one first.
+                        if (parts.Length >= 5
+                            && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float gx)
+                            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float gy)
+                            && float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float gz))
+                            Autopilot.SetDestination(new Vector3(gx, gy, gz), "Console pin");
+                        if (Autopilot.Destination == null) { Say("goto: no destination - 'yesla goto <x> <y> <z>'"); break; }
+                        Say(Summon.SendTo(Phone.YeslaApp.MyCar(), Autopilot.Destination.Value, Autopilot.DestinationLabel) ?? "goto: sent to " + Autopilot.DestinationLabel + " at " + Autopilot.Destination.Value.ToString("F0"));
                         break;
                     }
 
@@ -295,6 +315,7 @@ namespace Yesla.Debugging
                         bool accepts = menu.AcceptInputFromCurrentState();
                         bool close = parts.Length > 2 && parts[2] == "close";
                         if (close) menu.Close(); else if (!menu.IsOpen) menu.Open();
+                        if (parts.Length > 2 && parts[2] == "app" && !Phone.YeslaApp.Open()) { Say("phone: the Yesla app is not registered"); break; }
                         Say("phone: state " + stateName + ", key accepted " + accepts + ", " + (close ? "closed" : "open " + menu.IsOpen) + ". " + Autopilot.Describe());
                         break;
                     }
@@ -462,6 +483,30 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "overhead":
+                    {
+                        // 'overhead [height]' draws the screen from a camera straight above the nearest own Yesla, for a
+                        // parking screenshot; 'overhead off' removes it. The player camera keeps running underneath.
+                        string arg = parts.Length > 2 ? parts[2].ToLowerInvariant() : "";
+                        if (_overhead != null) { UnityEngine.Object.Destroy(_overhead); _overhead = null; }
+                        if (arg == "off") { Say("overhead: off"); break; }
+                        float height = 14f;
+                        if (arg.Length > 0) float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out height);
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("overhead: no own Yesla"); break; }
+                        _overhead = new GameObject("Yesla_OverheadCam");
+                        Camera cam = _overhead.AddComponent<Camera>();
+                        Camera main = Camera.main;
+                        cam.depth = (main != null ? main.depth : 0f) + 50f;
+                        cam.fieldOfView = 50f;
+                        cam.farClipPlane = 300f;
+                        Vector3 fwd = car.transform.forward; fwd.y = 0f;
+                        _overhead.transform.position = car.transform.position + Vector3.up * height;
+                        _overhead.transform.rotation = Quaternion.LookRotation(Vector3.down, fwd.normalized);
+                        Say("overhead: camera " + height.ToString("F0") + " m above " + car.VehicleName + " at " + car.transform.position.ToString("F1") + ", car yaw " + car.transform.eulerAngles.y.ToString("F0") + " deg (screen up = car forward)");
+                        break;
+                    }
+
                     case "dropon":
                     {
                         // Spawns a Hounddog 4 m above the nearest own Yesla; the fall is a Sentry hit.
@@ -607,6 +652,86 @@ namespace Yesla.Debugging
                         if (exitMenu != null && exitMenu.IsOpen) { exitMenu.Close(); Say("exit: closed the phone first"); }
                         car.ExitVehicle();
                         Say("exit: asked to leave " + car.VehicleName + " - 'yesla cars' shows whether it is still occupied");
+                        break;
+                    }
+
+                    case "sharp":
+                    {
+                        // Why the phone looks softer than the HUD: the camera that draws it, and mipmapped page images.
+                        // sharp            - report
+                        // sharp post on|off - the phone camera's post-processing
+                        // sharp aa none|fxaa|smaa - its anti-aliasing
+                        // sharp bias <n>   - mip bias on every mipmapped texture of 48 or 552 px (our icons and photos)
+                        var overlay = GameObject.Find("OverlayCamera");
+                        var cam = overlay != null ? overlay.GetComponent<Camera>() : null;
+                        var data = overlay != null ? overlay.GetComponent<UnityEngine.Rendering.Universal.UniversalAdditionalCameraData>() : null;
+                        if (cam == null || data == null) { Say("sharp: no OverlayCamera with URP camera data"); break; }
+                        string op = parts.Length > 2 ? parts[2] : "";
+                        string val = parts.Length > 3 ? parts[3] : "";
+                        if (op == "post") data.renderPostProcessing = val == "on";
+                        else if (op == "aa")
+                            data.antialiasing = val == "fxaa" ? UnityEngine.Rendering.Universal.AntialiasingMode.FastApproximateAntialiasing
+                                : val == "smaa" ? UnityEngine.Rendering.Universal.AntialiasingMode.SubpixelMorphologicalAntiAliasing
+                                : UnityEngine.Rendering.Universal.AntialiasingMode.None;
+                        else if (op == "bias")
+                        {
+                            if (!float.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out float bias)) { Say("sharp: '" + val + "' is not a number."); break; }
+                            int set = 0;
+                            foreach (Texture2D tex in Resources.FindObjectsOfTypeAll<Texture2D>())
+                                if (tex != null && tex.mipmapCount > 1 && (tex.width == 48 || tex.width == 552)) { tex.mipMapBias = bias; set++; }
+                            Say("sharp: mip bias " + bias + " on " + set + " texture(s)");
+                        }
+                        else if (op == "ignore")
+                        {
+                            // The quality level's texture limit also cuts textures made at runtime, unless they opt out.
+                            int set = 0;
+                            foreach (Texture2D tex in Resources.FindObjectsOfTypeAll<Texture2D>())
+                                if (tex != null && tex.mipmapCount > 1 && (tex.width == 48 || tex.width == 552)) { tex.ignoreMipmapLimit = val == "on"; set++; }
+                            Say("sharp: ignoreMipmapLimit " + (val == "on") + " on " + set + " texture(s)");
+                        }
+                        else if (op == "limit")
+                        {
+                            if (!int.TryParse(val, out int limit)) { Say("sharp: '" + val + "' is not a number."); break; }
+                            QualitySettings.globalTextureMipmapLimit = limit;
+                        }
+                        int limited = 0, sampled = 0, ignoring = 0;
+                        foreach (Texture2D tex in Resources.FindObjectsOfTypeAll<Texture2D>())
+                            if (tex != null && tex.mipmapCount > 1 && (tex.width == 48 || tex.width == 552)) { sampled++; if (tex.activeMipmapLimit > 0) limited++; if (tex.ignoreMipmapLimit) ignoring++; }
+                        Say("sharp: quality '" + QualitySettings.names[QualitySettings.GetQualityLevel()] + "' globalTextureMipmapLimit="
+                            + QualitySettings.globalTextureMipmapLimit + " | page images limited " + limited + "/" + sampled + ", ignoreMipmapLimit set on " + ignoring);
+                        Say("sharp: OverlayCamera renderType=" + data.renderType + " post=" + data.renderPostProcessing + " aa=" + data.antialiasing
+                            + " msaa=" + cam.allowMSAA + " hdr=" + cam.allowHDR + " fov=" + cam.fieldOfView.ToString("F0")
+                            + " | main: " + (Camera.main != null ? Camera.main.name + " " + Camera.main.pixelWidth + "x" + Camera.main.pixelHeight : "none")
+                            + " | render scale " + (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline?.TryCast<UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset>() is { } urp ? urp.renderScale.ToString("F2") + " msaa " + urp.msaaSampleCount : "?"));
+                        break;
+                    }
+
+                    case "glass":
+                    {
+                        // glass                      - report the window materials of the nearest own Yesla
+                        // glass cast on|off          - their shadow caster pass
+                        // glass receive on|off       - whether they receive shadows
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("glass: no own Yesla"); break; }
+                        string op = parts.Length > 2 ? parts[2] : "";
+                        bool on = parts.Length > 3 && parts[3] == "on";
+                        int n = 0;
+                        string state = "";
+                        foreach (Renderer r in car.GetComponentsInChildren<Renderer>(true))
+                            foreach (Material m in r.sharedMaterials)
+                            {
+                                if (m == null || !Vehicle.GlbModel.InGroup(m.name.Replace(" (Instance)", "").Replace("Yesla_", ""), "Glass")) continue;
+                                if (op == "cast") m.SetShaderPassEnabled("ShadowCaster", on);
+                                else if (op == "receive")
+                                {
+                                    m.SetFloat("_ReceiveShadows", on ? 1f : 0f);
+                                    if (on) m.DisableKeyword("_RECEIVE_SHADOWS_OFF"); else m.EnableKeyword("_RECEIVE_SHADOWS_OFF");
+                                }
+                                n++;
+                                state = m.name + " cast=" + m.GetShaderPassEnabled("ShadowCaster") + " receive=" + !m.IsKeywordEnabled("_RECEIVE_SHADOWS_OFF")
+                                        + " cull=" + m.GetFloat("_Cull") + " queue=" + m.renderQueue + " | renderer " + r.name + " shadows=" + r.shadowCastingMode;
+                            }
+                        Say("glass: " + n + " window material slot(s); last: " + state);
                         break;
                     }
 

@@ -155,8 +155,11 @@ namespace Yesla.Driving
             return Lots;
         }
 
-        /// <summary>The nearest free lot spot within <see cref="SearchRadius"/> of <paramref name="near"/>, or null.</summary>
-        internal static ParkTarget Find(LandVehicle car, Vector3 near, out string why)
+        /// <summary>The nearest free lot spot within <paramref name="radius"/> (default <see cref="SearchRadius"/>) of
+        /// <paramref name="near"/>, or null. With <paramref name="reachable"/> only a spot the car has a planned way
+        /// into from where it stands now: a lot whose aisle is too shallow to back in and too tight for a turn in
+        /// nose first leaves the car across the bays after every try.</summary>
+        internal static ParkTarget Find(LandVehicle car, Vector3 near, out string why, float radius = SearchRadius, bool reachable = false)
         {
             var candidates = new List<(float d, ParkingLot lot, int index, ParkingSpot spot)>();
             foreach (ParkingLot lot in AllLots())
@@ -167,13 +170,19 @@ namespace Yesla.Driving
                     ParkingSpot spot = lot.ParkingSpots[i];
                     if (spot == null || spot.AlignmentPoint == null) continue;
                     float d = Flat(spot.AlignmentPoint.position - near).magnitude;
-                    if (d <= SearchRadius) candidates.Add((d, lot, i, spot));
+                    if (d <= radius) candidates.Add((d, lot, i, spot));
                 }
             }
-            if (candidates.Count == 0) { why = "no parking lot within " + SearchRadius.ToString("F0") + " m"; return null; }
+            if (candidates.Count == 0) { why = "no parking lot within " + radius.ToString("F0") + " m"; return null; }
             candidates.Sort((a, b) => a.d.CompareTo(b.d));
 
-            int taken = 0, blocked = 0;
+            // Planning fills the shared stage and reverse paths, so it is only tried while no manoeuvre runs.
+            if (reachable && _car != null)
+            {
+                Core.Log.Warning("[Park] the manoeuvre is busy with " + _car.VehicleName + " - choosing a spot without checking the way in.");
+                reachable = false;
+            }
+            int taken = 0, blocked = 0, unreachable = 0;
             for (int c = 0; c < candidates.Count && c < MaxCandidates; c++)
             {
                 var (_, lot, index, spot) = candidates[c];
@@ -181,12 +190,30 @@ namespace Yesla.Driving
                 if (Skip.Contains(spot.Pointer)) { blocked++; continue; }
                 ParkTarget t = ForSpot(car, lot, index, spot);
                 if (!Free(car, t, out string what)) { blocked++; if (blocked <= 3) Core.Log.Msg("[Park] " + t.Label + " is blocked by " + what + "."); continue; }
+                if (reachable && !WayIn(car, t, out string none)) { unreachable++; if (unreachable <= 3) Core.Log.Msg("[Park] " + t.Label + ": no way in from where the car stands (" + none + ")."); continue; }
                 why = string.Empty;
-                Core.Log.Msg("[Park] chose " + t.Label + ", " + candidates[c].d.ToString("F0") + " m from the destination (" + taken + " taken, " + blocked + " blocked before it).");
+                Core.Log.Msg("[Park] chose " + t.Label + ", " + candidates[c].d.ToString("F0") + " m from the destination (" + taken + " taken, " + blocked + " blocked, " + unreachable + " out of reach before it).");
                 return t;
             }
-            why = "all " + Mathf.Min(candidates.Count, MaxCandidates) + " spot(s) nearby are taken";
+            why = "all " + Mathf.Min(candidates.Count, MaxCandidates) + " spot(s) nearby are taken" + (unreachable > 0 ? " or out of reach (" + unreachable + ")" : "");
             return null;
+        }
+
+        /// <summary>
+        /// Whether a way into the spot plans from the car's pose now: backing in with a swing in the aisle, or nose
+        /// first on a turn from a lane along it. Both leave <paramref name="t"/> as it was.
+        /// </summary>
+        private static bool WayIn(LandVehicle car, ParkTarget t, out string why)
+        {
+            Vector3 pos = Flat3(car.transform.position, t.Centre.y);
+            bool flipped = !t.Reverse;
+            if (flipped) { t.Heading = -t.Heading; t.Reverse = true; }
+            bool back = PlanReverse(car, t, pos, true, out string block);
+            if (flipped) { t.Heading = -t.Heading; t.Reverse = false; }
+            if (back) { why = "backing in"; return true; }
+            if (NoseInLane(car, t, pos, null, out string lane)) { why = "nose first along the aisle"; return true; }
+            why = "backing in: " + block + "; " + lane;
+            return false;
         }
 
         /// <summary>Free lot spots within <paramref name="radius"/> of <paramref name="near"/>, laid out for this car.</summary>
@@ -225,16 +252,68 @@ namespace Yesla.Driving
         }
 
         /// <summary>The kerb a few metres ahead, from the car's pose where the road AI stopped it.</summary>
-        internal static ParkTarget Kerb(LandVehicle car)
+        internal static ParkTarget Kerb(LandVehicle car, float ahead = KerbAhead)
         {
             Vector3 fwd = Flat(car.transform.forward).normalized;
             Vector3 right = Vector3.Cross(Vector3.up, fwd);
             Vector3 pos = car.transform.position;
             return new ParkTarget
             {
-                Centre = pos + fwd * KerbAhead + right * KerbShift, Heading = fwd, Entry = pos,
+                Centre = pos + fwd * ahead + right * KerbShift, Heading = fwd, Entry = pos,
                 Label = "the kerb", Kerb = true,
             };
+        }
+
+        /// <summary>A rise of more than this to the right of the lane is the pavement's kerb stone.</summary>
+        private const float VergeRise = 0.07f;
+        /// <summary>The kerb is looked for this far to the right of the car's line.</summary>
+        private const float VergeSearch = 7f;
+        /// <summary>The car's centre stands this far past the kerb's edge: right wheels up, left wheels in the road.</summary>
+        private const float VergeOnto = 0.1f;
+
+        /// <summary>
+        /// Pulled over half onto the pavement <paramref name="ahead"/> metres on, the way a car stops where there is no
+        /// parking: the right wheels up on the pavement, the left ones in the road. The pavement starts at the first
+        /// rise of more than <see cref="VergeRise"/> right of the car's line. With no kerb in reach, or something
+        /// standing on the pavement there, it is the plain <see cref="Kerb"/> pull-over.
+        /// </summary>
+        internal static ParkTarget Verge(LandVehicle car, float ahead)
+        {
+            Vector3 fwd = Flat(car.transform.forward).normalized;
+            Vector3 right = Vector3.Cross(Vector3.up, fwd);
+            Vector3 at = car.transform.position + fwd * ahead;
+            float top = car.transform.position.y + 3f;
+            if (!GroundAt(car, new Vector3(at.x, top, at.z), out float road))
+            {
+                Core.Log.Msg("[Park] verge: no ground " + ahead.ToString("F0") + " m ahead - the plain kerb pull-over.");
+                return Kerb(car, ahead);
+            }
+            float edge = -1f;
+            string stop = "no kerb within " + VergeSearch.ToString("F0") + " m to the right";
+            for (float s = KerbSample; s <= VergeSearch; s += KerbSample)
+            {
+                Vector3 p = at + right * s;
+                if (!GroundAt(car, new Vector3(p.x, top, p.z), out float h)) continue;
+                if (h - road > VergeRise) { edge = s; break; }
+                if (road - h > 0.3f) { stop = "the ground drops " + (road - h).ToString("F1") + " m at " + s.ToString("F1") + " m to the right"; break; }
+            }
+            if (edge < 0f)
+            {
+                Core.Log.Msg("[Park] verge: " + stop + " - the plain kerb pull-over.");
+                return Kerb(car, ahead);
+            }
+            var t = new ParkTarget
+            {
+                Centre = new Vector3(at.x, road, at.z) + right * (edge + VergeOnto), Heading = fwd, Entry = car.transform.position,
+                Label = "half on the pavement", Kerb = true,
+            };
+            if (!Free(car, t, out string what))
+            {
+                Core.Log.Msg("[Park] verge: the pavement " + edge.ToString("F1") + " m to the right is blocked by " + what + " - the plain kerb pull-over.");
+                return Kerb(car, ahead);
+            }
+            Core.Log.Msg("[Park] verge: kerb " + edge.ToString("F1") + " m to the right, " + ahead.ToString("F0") + " m ahead - pulling over half onto the pavement.");
+            return t;
         }
 
         /// <summary>Whether anything stands in the space the car will take, at bumper to roof height.</summary>
@@ -442,6 +521,8 @@ namespace Yesla.Driving
         private static bool _turning;
         private static Vector3 _backFrom;
         private static float _phaseTime, _blockedFor, _stillFor, _stuckFor, _steer;
+        /// <summary>Whether this manoeuvre already reported waking an empty kinematic car.</summary>
+        private static bool _wokeUp;
         /// <summary>How long the run to the stop point may take: its length at approach speed, half again, plus slack.</summary>
         private static float _stageBudget = 15f;
         /// <summary>Metres to the left (negative: right) of the stage path the car aims, away from a post.</summary>
@@ -454,6 +535,8 @@ namespace Yesla.Driving
 
         /// <summary>The spot the running manoeuvre heads for, or null.</summary>
         internal static ParkTarget Current => _target;
+        /// <summary>The car the running manoeuvre parks, or null.</summary>
+        internal static LandVehicle Car => _car;
         /// <summary>The car stands in the spot and is braking to a halt.</summary>
         internal static bool Settling => _car != null && _phase == Phase.Settle;
         internal static string Describe() => _car == null ? "parking: idle"
@@ -483,6 +566,7 @@ namespace Yesla.Driving
 
         private static void Begin(LandVehicle car, ParkTarget target, Action<bool, string> done)
         {
+            _wokeUp = false;
             // The player may have switched the direction since the spot was chosen; the target turns round with it.
             // On auto the car backs in, unless it already faces the spot head-on and drives straight in.
             string mode = Config.Preferences.ParkDirection;
@@ -989,6 +1073,14 @@ namespace Yesla.Driving
             float dt = Time.deltaTime;
             _phaseTime += dt;
             car.overrideControls = true;
+            // Vanilla makes an empty car kinematic once no player is within 30 m (ShouldBePhysicallySimulated), and a
+            // kinematic car ignores the throttle. A car that was just left counts as occupied for 5 s, so a summoned
+            // car parking far from its owner stays a physical car by looking just left.
+            if (!car.IsOccupied)
+            {
+                if (car.Rb != null && car.Rb.isKinematic && !_wokeUp) { Core.Log.Msg("[Park] empty car is kinematic - keeping it physical for the manoeuvre."); _wokeUp = true; }
+                car.timeOnLastOccupied = Time.timeSinceLevelLoad;
+            }
             float v = car.Speed_Kmh;
             Vector3 pos = car.transform.position;
             Vector3 fwd = Flat(car.transform.forward).normalized;

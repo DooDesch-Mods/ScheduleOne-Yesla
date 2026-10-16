@@ -188,6 +188,9 @@ namespace Yesla.Vehicle
             mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
             mat.SetOverrideTag("RenderType", "Transparent");
             mat.renderQueue = 3000;
+            // A see-through sheet drawn from both sides would also shadow itself from both sides: the shadow map
+            // lands on its own surface and shows as dark jagged patches across the windows.
+            mat.SetShaderPassEnabled("ShadowCaster", false);
         }
 
         /// <summary>

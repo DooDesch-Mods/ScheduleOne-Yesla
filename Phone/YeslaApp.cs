@@ -28,6 +28,14 @@ namespace Yesla.Phone
         private const float IconSeconds = 2f;
 
         private static AppHandle _app;
+
+        /// <summary>Opens the app on the phone through Sideload's public API, which a Release Sideload keeps too.</summary>
+        internal static bool Open()
+        {
+            if (_app == null) { Core.Log.Warning("[App] open: the app is not registered."); return false; }
+            _app.Open();
+            return true;
+        }
         private static float _nextPulse;
         private static float _nextPlaces;
         private static float _nextIcon;
@@ -46,6 +54,7 @@ namespace Yesla.Phone
                 .OnCall("yesla.profile", id => Guard("profile", () => DriveProfile.Select(id) != null ? "ok" : "error:Unknown drive profile."))
                 .OnCall("yesla.parking", mode => Guard("parking", () => SetParking(mode)))
                 .OnCall("yesla.summon", _ => Guard("summon", ToggleSummon))
+                .OnCall("yesla.goto", _ => Guard("goto", GoToTarget))
                 .OnCall("yesla.honk", _ => Guard("honk", () => Answer(Remote.Honk(MyCar()))))
                 .OnCall("yesla.lock", _ => Guard("lock", () => Answer(Remote.ToggleLock(MyCar()))))
                 .OnCall("yesla.sentry", _ => Guard("sentry", () => Answer(Remote.ToggleSentry(MyCar()))))
@@ -333,8 +342,17 @@ namespace Yesla.Phone
         private static string ToggleSummon()
         {
             LandVehicle car = MyCar();
-            bool coming = car != null && Summon.StatusOf(car).state == SummonState.Coming;
+            SummonState s = car != null ? Summon.StatusOf(car).state : SummonState.Off;
+            bool coming = s == SummonState.Coming || s == SummonState.Going;
             return Answer(coming ? Summon.Cancel(car) : Summon.Request(car));
+        }
+
+        /// <summary>Go to target: the empty car drives itself to the sent destination and parks there.</summary>
+        private static string GoToTarget()
+        {
+            Vector3? dest = Autopilot.Destination;
+            if (dest == null) { Core.Log.Msg("[App] go to target: no destination sent."); return "error:Send a destination first."; }
+            return Answer(Summon.SendTo(MyCar(), dest.Value, Autopilot.DestinationLabel));
         }
 
         /// <summary>A refusal reason becomes the page's "error:" answer, null becomes "ok".</summary>

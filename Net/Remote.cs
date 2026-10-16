@@ -88,6 +88,10 @@ namespace Yesla.Net
                     if (!int.TryParse(m.Arg(0), out int sid) || !Summon.TryVec(m.Arg(2), out Vector3 at)) { Bad(m); return; }
                     Summon.HostStart(sid, m.Arg(1), at, m.Arg(3));
                     return;
+                case "req.goto":
+                    if (!int.TryParse(m.Arg(0), out int gid) || !Summon.TryVec(m.Arg(2), out Vector3 to)) { Bad(m); return; }
+                    Summon.HostStart(gid, m.Arg(1), to, m.Arg(3), goTo: true, label: m.Arg(4));
+                    return;
                 case "req.unsummon":
                     if (!int.TryParse(m.Arg(0), out int uid)) { Bad(m); return; }
                     Summon.HostCancel(uid, m.Arg(1));

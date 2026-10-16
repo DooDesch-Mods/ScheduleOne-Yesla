@@ -408,6 +408,14 @@ function summonLine() {
         parts.push('·', String(Math.round(state.car.speed)), 'km/h', '·', d[0], d[1], 'away');
       }
       return parts;
+    case 'Going':
+      var gp = ['Going to', m.reason || 'target'];
+      if (state.car) gp.push('·', String(Math.round(state.car.speed)), 'km/h');
+      return gp;
+    case 'Parking':
+      var pp = ['Parking'];
+      if (state.car && !state.car.inside) { var pd = metreParts(state.car.distance); pp.push('·', pd[0], pd[1], 'away'); }
+      return pp;
     case 'Arrived': return ['Your car is here.'];
     case 'Failed': return [m.reason || 'Summon stopped.'];
     default: return null;
@@ -484,14 +492,13 @@ function renderCar() {
       setStatus('');
     }
   }
-  setText($('s-profile'), PROFILE_NAME[(state.drive && state.drive.profile) || 'standard'] || 'Standard');
   renderTiles();
 }
 
 function renderTiles() {
   var car = state.car;
   var mine = !!(car && car.mine);
-  var coming = state.summon && state.summon.state === 'Coming';
+  var coming = state.summon && (state.summon.state === 'Coming' || state.summon.state === 'Going');
 
   setTile('c-summon', !mine || car.inside, coming);
   setText($('c-summon-t'), coming ? 'Stop' : 'Summon');
@@ -560,11 +567,15 @@ function renderCard() {
     setClass(name, 'dn');
     setPieces(line, [selected.meta || '']);
     setClass(line, 'dl');
+    setText(send, 'Send to car');
     send.disabled = !(state.car && state.car.mine);
     clear.disabled = false;
     return;
   }
-  send.disabled = true;
+  // With a destination sent, the same button sends the empty car there to park, and stops it on the way.
+  var going = state.summon && state.summon.state === 'Going';
+  setText(send, going ? 'Stop' : (state.dest ? 'Go to target' : 'Send to car'));
+  send.disabled = going ? false : !(state.dest && state.car && state.car.mine && !state.car.inside);
   if (state.dest) {
     setText(name, state.dest.label);
     setClass(name, 'dn');
@@ -595,7 +606,12 @@ function selectPoint(x, y) {
 }
 
 function send() {
-  if (!selected) return;
+  if (!selected) {
+    var going = state.summon && state.summon.state === 'Going';
+    if (!going && !state.dest) return;
+    control(going ? 'yesla.summon' : 'yesla.goto');
+    return;
+  }
   var r = selected.type === 'place'
     ? s1.call('yesla.send.place', selected.id)
     : s1.call('yesla.send.point', selected.x.toFixed(5) + ',' + selected.y.toFixed(5));
