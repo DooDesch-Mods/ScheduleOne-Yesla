@@ -1,0 +1,120 @@
+{
+  "length": 4.696648359298706,
+  "width": 2.1911107301712036,
+  "height": 1.2757875993847847,
+  "wheelbase": 2.8540075787265007,
+  "track": 1.6586873890313936,
+  "wheelRadius": 0.3323740368285113,
+  "wheelWidth": 0.2473022492840794,
+  "wheels": {
+    "FL": [
+      0.8293436945156968,
+      0.3323740368285113,
+      1.4270037893632503
+    ],
+    "FR": [
+      -0.8293436945156968,
+      0.3323740368285113,
+      1.4270037893632503
+    ],
+    "RL": [
+      0.8293436945156968,
+      0.3323740368285113,
+      -1.4270037893632503
+    ],
+    "RR": [
+      -0.8293436945156968,
+      0.3323740368285113,
+      -1.4270037893632503
+    ]
+  },
+  "driverHead": [
+    0.345943154995975,
+    1.2252766389109022,
+    0.26196240682412625
+  ],
+  "lcdCenter": [
+    -0.00023640771652485592,
+    0.8112791768963026,
+    0.5062594456747
+  ],
+  "lcdNormal": [
+    -1.3036369637120515e-05,
+    0.2263866662979126,
+    -0.9740375280380249
+  ],
+  "bounds": {
+    "min": [
+      -1.0956230163574219,
+      0.12441670149564743,
+      -2.477705955505371
+    ],
+    "max": [
+      1.0954877138137817,
+      1.4002043008804321,
+      2.218942403793335
+    ]
+  },
+  "triangles": {
+    "Body_LOD0": 58996,
+    "Body_LOD1": 15752,
+    "Body_LOD2": 3874,
+    "Wheel": 3780,
+    "Wheel_LOD1": 1294
+  },
+  "materials": [
+    "Interior_Dark",
+    "Trim_Black",
+    "Interior_Leather_White",
+    "Chrome",
+    "Light_Head",
+    "Paint",
+    "Light_Brake",
+    "Glass",
+    "Mirror",
+    "Light_IndicatorL",
+    "Light_IndicatorR",
+    "Interior_Light",
+    "Reflector_Red",
+    "Light_Reverse",
+    "Licence_Plate",
+    "Underbody",
+    "LCD",
+    "Tyre_Rubber",
+    "Rim_Alloy",
+    "Brake_Disc"
+  ],
+  "wheelSide": "Wheel node is the LEFT wheel (outward face +X, car faces +Z); mirror in X for FR/RR",
+  "lcdSize": [
+    0.3377971329573268,
+    0.2651212501669614
+  ],
+  "lightColorsOn": {
+    "Light_Head": [
+      1.0,
+      0.97,
+      0.9
+    ],
+    "Light_Brake": [
+      1.0,
+      0.03,
+      0.02
+    ],
+    "Light_IndicatorL": [
+      1.0,
+      0.45,
+      0.0
+    ],
+    "Light_IndicatorR": [
+      1.0,
+      0.45,
+      0.0
+    ],
+    "Light_Reverse": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "credit": "Tesla 2018 Model 3 by Ameer Studio, CC-BY-4.0"
+}

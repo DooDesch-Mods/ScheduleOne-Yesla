@@ -1,0 +1,165 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Shared release hardening: strip Release debug info + assembly identity, cuts AV false positives (see Workspace/build/Hardening.props). -->
+  <Import Project="$(MSBuildThisFileDirectory)../Workspace/build/Hardening.props" Condition="Exists('$(MSBuildThisFileDirectory)../Workspace/build/Hardening.props')" />
+  <Import Project="$(MSBuildThisFileDirectory)Workspace/build/Hardening.props" Condition="Exists('$(MSBuildThisFileDirectory)Workspace/build/Hardening.props')" />
+
+  <!-- CI checks out the shared Workspace repo as a SUBFOLDER of this project, so the SDK's default **/*.cs glob
+       would sweep in Workspace/ui, Workspace/build, etc. This mod compiles only its own source. -->
+  <ItemGroup>
+    <Compile Remove="Workspace/**/*.cs" />
+  </ItemGroup>
+
+  <!-- Generates DooDesch.ModVersion.Current from this project's own version property, so MelonInfo carries the
+       released version and cannot drift out of it. MUST come after the Workspace Remove so CI keeps the file. -->
+  <Import Project="$(MSBuildThisFileDirectory)../Workspace/build/ModVersion.props" Condition="Exists('$(MSBuildThisFileDirectory)../Workspace/build/ModVersion.props')" />
+  <Import Project="$(MSBuildThisFileDirectory)Workspace/build/ModVersion.props" Condition="Exists('$(MSBuildThisFileDirectory)Workspace/build/ModVersion.props')" />
+  <!-- Where a build is allowed to install: the test copy by default, and never a real game installation
+       without saying so out loud. See Workspace/build/Deploy.props. -->
+  <Import Project="$(MSBuildThisFileDirectory)../Workspace/build/Deploy.props" Condition="Exists('$(MSBuildThisFileDirectory)../Workspace/build/Deploy.props')" />
+  <Import Project="$(MSBuildThisFileDirectory)Workspace/build/Deploy.props" Condition="Exists('$(MSBuildThisFileDirectory)Workspace/build/Deploy.props')" />
+
+
+  <!--
+    Yesla - MelonLoader IL2CPP mod for Schedule I.
+    A buyable electric sedan with assisted driving: pick a destination on the phone, send it to the car, and the
+    vanilla road AI (VehicleAgent) drives it there - on the host and on clients alike.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Yesla</RootNamespace>
+    <AssemblyName>Yesla</AssemblyName>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <!-- NEVER bumped. The release version comes from the tag: CI builds with -p:Version=X.Y.Z, which is a
+         global MSBuild property and therefore cannot be overwritten from here. A local build without one
+         says 0.0.0-dev, which is exactly what it is. AssemblyVersion and FileVersion are left to the SDK -
+         pinning them by hand is how they drift out of Version.
+         Rules: Workspace/docs/RELEASE-PROCESS.md, section "Versioning". -->
+    <Version Condition="'$(Version)' == ''">0.0.0-dev</Version>
+    <!-- Suppress MSB3277/MSB3245 noise from il2cpp interop transitive refs -->
+    <NoWarn>$(NoWarn);MSB3277;MSB3245</NoWarn>
+
+    <WorkspaceLibPath Condition="'$(WorkspaceLibPath)' == ''">$(MSBuildThisFileDirectory)../Workspace/lib</WorkspaceLibPath>
+    <!-- The test copy, never the real install. A build that lands in the Steam directory replaces the DLL a
+         player is running, and there is no copy of what it replaced. Pass -p:ModsDirectory=... for a real
+         beta test, deliberately. -->
+  </PropertyGroup>
+
+  <!-- Backend selection derived from the active TargetFramework -->
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net6.0'">
+    <Backend>il2cpp</Backend>
+    <DefineConstants>$(DefineConstants);IL2CPP</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'netstandard2.1'">
+    <Backend>mono</Backend>
+    <DefineConstants>$(DefineConstants);MONO</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup>
+    <GameManagedPath>$(WorkspaceLibPath)/$(Backend)/game</GameManagedPath>
+    <MelonLoaderPath>$(WorkspaceLibPath)/$(Backend)/melonloader</MelonLoaderPath>
+  </PropertyGroup>
+
+  <!-- Backend-specific GlobalUsings: keep only the active backend's file -->
+  <ItemGroup>
+    <Compile Remove="Compat/GlobalUsings.Il2Cpp.cs" Condition="'$(Backend)' != 'il2cpp'" />
+    <Compile Remove="Compat/GlobalUsings.Mono.cs" Condition="'$(Backend)' != 'mono'" />
+  </ItemGroup>
+
+  <!-- Mod loader references (both backends) -->
+  <ItemGroup>
+    <Reference Include="MelonLoader">
+      <HintPath>$(MelonLoaderPath)/MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(MelonLoaderPath)/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- IL2CPP-only references -->
+  <ItemGroup Condition="'$(Backend)' == 'il2cpp'">
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(MelonLoaderPath)/Il2CppInterop.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(GameManagedPath)/Il2Cppmscorlib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem">
+      <HintPath>$(GameManagedPath)/Il2CppSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameManagedPath)/Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppScheduleOne.Core">
+      <HintPath>$(GameManagedPath)/Il2CppScheduleOne.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppFishNet.Runtime">
+      <HintPath>$(GameManagedPath)/Il2CppFishNet.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="S1API.Il2Cpp.MelonLoader">
+      <HintPath>$(WorkspaceLibPath)/il2cpp/s1api/S1API.Il2Cpp.MelonLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AIModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.AIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- WheelCollider: the Yesla wheels are fitted to the model's wheel positions and radius. -->
+    <Reference Include="UnityEngine.VehiclesModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.VehiclesModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Seeker: the A* path seekers VehicleAgent hands to NavigationUtility.CalculatePath. -->
+    <Reference Include="Il2CppAstarPathfindingProject">
+      <HintPath>$(GameManagedPath)/Il2CppAstarPathfindingProject.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Raw key state for the player's in-car keys; the game's input map has no free action for them. -->
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>$(MelonLoaderPath)/Newtonsoft.Json.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- The car model, embedded so the mod stays a single file. Read by Vehicle/YeslaModel.cs. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/yesla.glb">
+      <LogicalName>Yesla.Assets.yesla.glb</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <Target Name="PostBuild" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT'">
+    <Exec Condition="Exists('$(ModsDirectory)')"
+          Command="cmd /c if exist &quot;$(ModsDirectory)&quot; copy /Y &quot;$(TargetPath)&quot; &quot;$(ModsDirectory)&quot;"
+          ContinueOnError="true" />
+  </Target>
+
+</Project>

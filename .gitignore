@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+
+# IDE
+.vs/
+.idea/
+*.user
+
+# AI tooling state (worktrees, local agent config) - never ship in the mod repo
+.claude/
+
+# Tool output that is not mod content
+*.log
+
+# Debug
+Mods/
+
+# OS
+Thumbs.db
+.DS_Store

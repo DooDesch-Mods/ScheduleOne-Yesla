@@ -1,0 +1,252 @@
+using System;
+using System.Collections.Generic;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using Il2CppScheduleOne.Vehicles;
+
+namespace Yesla.Vehicle
+{
+    /// <summary>
+    /// Turns the cloned Hounddog into the Yesla Model 3 on the outside. The donor keeps its physics, seats, storage,
+    /// sensors and network parts; only what you see changes:
+    ///
+    /// * the donor body and wheel renderers are switched off, the Yesla meshes go into the same LODGroup;
+    /// * the wheels move to the model's wheel positions and get its radius, so the tyres sit in the arches;
+    /// * <c>VehicleColor</c> paints the Yesla's paint parts, <c>VehicleLights</c> switches the Yesla's lamps;
+    /// * the bounding box (the road AI reads it as the car's size) is fitted to the model.
+    ///
+    /// Everything happens once on the prefab; spawned cars are copies of it, and Unity remaps the references.
+    /// </summary>
+    internal static class YeslaBody
+    {
+        // Model space: ground at y = 0, car centred on the wheelbase. Car space (the donor's): the wheel transforms
+        // sit at y = -0.302 and the default suspension pose drops the wheel centre to -0.350.
+        private const float WheelTransformY = -0.302f;
+        private const float WheelRestCentreY = -0.350f;
+        private const float ModelOffsetZ = 0.0985f;        // the donor's wheelbase centre, so the car keeps its balance
+
+        private static readonly Color HeadOn = new Color(1f, 0.97f, 0.9f);
+        private static readonly Color BrakeOn = new Color(1f, 0.03f, 0.02f);
+        private static readonly Color ReverseOn = Color.white;
+
+        internal static bool Apply(GameObject car)
+        {
+            GlbModel model = GlbModel.LoadEmbedded();
+            if (model == null) return false;
+
+            YeslaLayout layout = YeslaLayout.Default;
+            LandVehicle lv = car.GetComponent<LandVehicle>();
+            Transform body = lv.vehicleModel != null ? lv.vehicleModel.transform : null;
+            if (body == null) { Core.Log.Error("[Body] the donor has no vehicle model - keeping the donor look."); return false; }
+            LODGroup lodGroup = body.GetComponentInChildren<LODGroup>(true);
+            if (lodGroup == null) { Core.Log.Error("[Body] the donor body has no LODGroup - keeping the donor look."); return false; }
+
+            int hidden = HideRenderers(lodGroup.transform);
+            int layer = lodGroup.gameObject.layer;
+            float modelOffsetY = WheelRestCentreY - layout.WheelRadius;
+
+            var root = new GameObject("YeslaModel");
+            root.layer = layer;
+            root.transform.SetParent(lodGroup.transform, false);
+            root.transform.localPosition = new Vector3(0f, modelOffsetY, ModelOffsetZ);
+
+            var lods = new List<Renderer>[3];
+            var paint = new List<MeshRenderer>();
+            var head = new List<MeshRenderer>();
+            var brake = new List<MeshRenderer>();
+            var reverse = new List<MeshRenderer>();
+            for (int i = 0; i < 3; i++)
+            {
+                lods[i] = new List<Renderer>();
+                if (!model.Nodes.TryGetValue("Body_LOD" + i, out List<GlbModel.Part> parts)) { Core.Log.Warning("[Body] the model has no Body_LOD" + i + "."); continue; }
+                var lodRoot = new GameObject("Body_LOD" + i);
+                lodRoot.layer = layer;
+                lodRoot.transform.SetParent(root.transform, false);
+                foreach (GlbModel.Part part in parts)
+                {
+                    MeshRenderer r = AddPart(lodRoot.transform, part, layer);
+                    lods[i].Add(r);
+                    switch (part.MaterialName)
+                    {
+                        case "Paint": paint.Add(r); break;
+                        case "Light_Head": head.Add(r); break;
+                        case "Light_Brake": brake.Add(r); break;
+                        case "Light_Reverse": reverse.Add(r); break;
+                    }
+                }
+            }
+
+            var old = lodGroup.GetLODs();
+            var newLods = new Il2CppReferenceArray<LOD>(3);
+            for (int i = 0; i < 3; i++)
+            {
+                float h = i < old.Length ? old[i].screenRelativeTransitionHeight : 0.01f;
+                newLods[i] = new LOD { screenRelativeTransitionHeight = h, renderers = ToArray(lods[i]) };
+            }
+            lodGroup.SetLODs(newLods);
+            lodGroup.RecalculateBounds();
+
+            BindColour(lv, paint);
+            BindLights(car, model, head, brake, reverse);
+            int wheels = FitWheels(lv, model, layout, layer);
+            FitBounds(lv, layout, modelOffsetY);
+            HideExhaust(lodGroup.transform);
+
+            Core.Log.Msg("[Body] Yesla body on: " + hidden + " donor renderer(s) off, LODs " + lods[0].Count + "/" + lods[1].Count + "/" + lods[2].Count
+                       + " part(s), " + paint.Count + " paint, lights " + head.Count + " head / " + brake.Count + " brake / " + reverse.Count + " reverse, " + wheels + " wheel(s).");
+            return true;
+        }
+
+        private static MeshRenderer AddPart(Transform parent, GlbModel.Part part, int layer)
+        {
+            var go = new GameObject(part.MaterialName);
+            go.layer = layer;
+            go.transform.SetParent(parent, false);
+            go.AddComponent<MeshFilter>().sharedMesh = part.Mesh;
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = part.Material;
+            return r;
+        }
+
+        private static int HideRenderers(Transform t)
+        {
+            int n = 0;
+            foreach (MeshRenderer r in t.GetComponentsInChildren<MeshRenderer>(true)) { if (r.enabled) n++; r.enabled = false; }
+            return n;
+        }
+
+        private static void BindColour(LandVehicle lv, List<MeshRenderer> paint)
+        {
+            if (lv.Color == null) { Core.Log.Warning("[Body] no VehicleColor on the donor - the Yesla cannot be repainted."); return; }
+            var meshes = new Il2CppReferenceArray<VehicleColor.BodyMesh>(paint.Count);
+            for (int i = 0; i < paint.Count; i++) meshes[i] = new VehicleColor.BodyMesh { Renderer = paint[i], MaterialIndex = 0 };
+            lv.Color.BodyMeshes = meshes;
+        }
+
+        private static void BindLights(GameObject car, GlbModel model, List<MeshRenderer> head, List<MeshRenderer> brake, List<MeshRenderer> reverse)
+        {
+            VehicleLights lights = car.GetComponent<VehicleLights>();
+            if (lights == null) { Core.Log.Warning("[Body] no VehicleLights on the donor - the Yesla lamps stay dark."); return; }
+
+            lights.headLightMeshes = ToMeshArray(head);
+            lights.headLightMat_Off = model.Materials["Light_Head"];
+            lights.headlightMat_On = GlbModel.Emissive(model.Materials["Light_Head"], HeadOn, "Yesla_Light_Head_On");
+
+            lights.brakeLightMeshes = ToMeshArray(brake);
+            lights.brakeLightMat_Off = model.Materials["Light_Brake"];
+            lights.brakeLightMat_On = GlbModel.Emissive(model.Materials["Light_Brake"], BrakeOn, "Yesla_Light_Brake_On");
+
+            lights.hasReverseLights = reverse.Count > 0;
+            lights.reverseLightMeshes = ToMeshArray(reverse);
+            lights.reverseLightMat_Off = model.Materials["Light_Reverse"];
+            lights.reverseLightMat_On = GlbModel.Emissive(model.Materials["Light_Reverse"], ReverseOn, "Yesla_Light_Reverse_On");
+        }
+
+        private static int FitWheels(LandVehicle lv, GlbModel model, YeslaLayout layout, int layer)
+        {
+            model.Nodes.TryGetValue("Wheel", out List<GlbModel.Part> lod0);
+            model.Nodes.TryGetValue("Wheel_LOD1", out List<GlbModel.Part> lod1);
+            if (lod0 == null) { Core.Log.Error("[Body] the model has no Wheel - keeping the donor wheels."); return 0; }
+
+            int n = 0;
+            foreach (Wheel w in lv.GetComponentsInChildren<Wheel>(true))
+            {
+                Transform t = w.transform;
+                bool right = t.localPosition.x > 0f;
+                bool front = t.localPosition.z > 0f;
+                t.localPosition = new Vector3((right ? 1f : -1f) * layout.WheelX, WheelTransformY, (front ? layout.WheelZ : -layout.WheelZ) + ModelOffsetZ);
+
+                float scale = t.localScale.y;
+                if (w.wheelCollider != null) w.wheelCollider.radius = layout.WheelRadius / scale;
+                else Core.Log.Warning("[Body] wheel " + t.name + " has no WheelCollider.");
+
+                if (w.wheelModel == null) { Core.Log.Warning("[Body] wheel " + t.name + " has no model transform - no Yesla wheel there."); continue; }
+                HideRenderers(w.wheelModel);
+
+                var root = new GameObject("YeslaWheel");
+                root.layer = layer;
+                root.transform.SetParent(w.wheelModel, false);
+                // The wheel mesh's outer face points left; the right side gets a mirrored copy.
+                root.transform.localScale = new Vector3((right ? -1f : 1f) / scale, 1f / scale, 1f / scale);
+
+                var r0 = new List<Renderer>();
+                foreach (GlbModel.Part p in lod0) r0.Add(AddPart(root.transform, p, layer));
+                var r1 = new List<Renderer>();
+                if (lod1 != null)
+                {
+                    var l1 = new GameObject("LOD1");
+                    l1.layer = layer;
+                    l1.transform.SetParent(root.transform, false);
+                    foreach (GlbModel.Part p in lod1) r1.Add(AddPart(l1.transform, p, layer));
+                }
+                LODGroup g = root.AddComponent<LODGroup>();
+                var lods = new Il2CppReferenceArray<LOD>(r1.Count > 0 ? 2 : 1);
+                lods[0] = new LOD { screenRelativeTransitionHeight = 0.03f, renderers = ToArray(r0) };
+                if (r1.Count > 0) lods[1] = new LOD { screenRelativeTransitionHeight = 0.004f, renderers = ToArray(r1) };
+                g.SetLODs(lods);
+                g.RecalculateBounds();
+                n++;
+            }
+
+            Transform carRoot = lv.transform;
+            SetZ(carRoot.Find("FrontAxlePosition"), layout.WheelZ + ModelOffsetZ);
+            SetZ(carRoot.Find("RearAxlePosition"), -layout.WheelZ + ModelOffsetZ);
+            return n;
+        }
+
+        private static void SetZ(Transform t, float z)
+        {
+            if (t == null) { Core.Log.Warning("[Body] axle marker missing on the donor."); return; }
+            Vector3 p = t.localPosition;
+            t.localPosition = new Vector3(p.x, p.y, z);
+        }
+
+        private static void FitBounds(LandVehicle lv, YeslaLayout layout, float modelOffsetY)
+        {
+            if (lv.boundingBox == null) { Core.Log.Warning("[Body] the donor has no bounding box."); return; }
+            Transform b = lv.boundingBox.transform;
+            float bottom = modelOffsetY;
+            float top = modelOffsetY + layout.Height;
+            float centreZ = (layout.MinZ + layout.MaxZ) * 0.5f + ModelOffsetZ;
+            b.localPosition = new Vector3(0f, (bottom + top) * 0.5f, centreZ);
+            b.localScale = new Vector3(layout.BodyWidth, layout.Height, layout.MaxZ - layout.MinZ);
+        }
+
+        /// <summary>An electric car has no exhaust; the donor's tailpipe smoke goes.</summary>
+        private static void HideExhaust(Transform t)
+        {
+            foreach (Transform c in t.GetComponentsInChildren<Transform>(true))
+                if (c.name.StartsWith("SmokeParticles", StringComparison.Ordinal)) c.gameObject.SetActive(false);
+        }
+
+        private static Il2CppReferenceArray<Renderer> ToArray(List<Renderer> list)
+        {
+            var a = new Il2CppReferenceArray<Renderer>(list.Count);
+            for (int i = 0; i < list.Count; i++) a[i] = list[i];
+            return a;
+        }
+
+        private static Il2CppReferenceArray<MeshRenderer> ToMeshArray(List<MeshRenderer> list)
+        {
+            var a = new Il2CppReferenceArray<MeshRenderer>(list.Count);
+            for (int i = 0; i < list.Count; i++) a[i] = list[i];
+            return a;
+        }
+    }
+
+    /// <summary>Measurements of yesla.glb in model space (metres, ground at 0), from yesla.layout.json.</summary>
+    internal struct YeslaLayout
+    {
+        internal float WheelX, WheelZ, WheelRadius, Height, BodyWidth, MinZ, MaxZ;
+
+        internal static readonly YeslaLayout Default = new YeslaLayout
+        {
+            WheelX = 0.8293f,
+            WheelZ = 1.4270f,
+            WheelRadius = 0.3324f,
+            Height = 1.4002f,
+            BodyWidth = 1.86f,      // without the mirrors
+            MinZ = -2.4777f,
+            MaxZ = 2.2189f,
+        };
+    }
+}
