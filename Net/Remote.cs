@@ -63,7 +63,7 @@ namespace Yesla.Net
                     return;
                 case "req.summon":
                     if (!int.TryParse(m.Arg(0), out int sid) || !Summon.TryVec(m.Arg(2), out Vector3 at)) { Bad(m); return; }
-                    Summon.HostStart(sid, m.Arg(1), at);
+                    Summon.HostStart(sid, m.Arg(1), at, m.Arg(3));
                     return;
                 case "req.unsummon":
                     if (!int.TryParse(m.Arg(0), out int uid)) { Bad(m); return; }

@@ -24,6 +24,17 @@ namespace Yesla.Vehicle
         internal const float TopSpeed = 65f;
         private const string DonorCode = "hounddog";
 
+        /// <summary>
+        /// Motor curve in km/h -> curve value, the electric drive: full pull from standstill and nearly flat to
+        /// 80 km/h, then falling to nothing at 135. The Hounddog's curve starts at 360 and drops to 230 by 50 km/h.
+        /// LandVehicle drives each drive wheel with value * diffGearing / 2; the car's drag sets the top speed where
+        /// the falling curve meets it, a little under 100 km/h.
+        /// </summary>
+        private static readonly (float kmh, float value)[] MotorCurve =
+        {
+            (0f, 560f), (50f, 540f), (80f, 470f), (100f, 380f), (120f, 250f), (135f, 0f),
+        };
+
         private static GameObject _prefab;
 
         internal static LandVehicle Prefab => _prefab != null ? _prefab.GetComponent<LandVehicle>() : null;
@@ -82,6 +93,7 @@ namespace Yesla.Vehicle
             lv.vehicleName = Name;
             lv.vehiclePrice = Price;
             lv.TopSpeed = TopSpeed;
+            ElectricDrive(lv);
 
             try
             {
@@ -100,6 +112,15 @@ namespace Yesla.Vehicle
             _prefab = clone;
             Core.Log.Msg("[VehicleType] built the '" + Code + "' prefab from '" + DonorCode + "'.");
             return true;
+        }
+
+        private static void ElectricDrive(LandVehicle lv)
+        {
+            var curve = new AnimationCurve();
+            foreach (var (kmh, value) in MotorCurve) curve.AddKey(kmh, value);
+            lv.motorTorque = curve;
+            Core.Log.Msg("[VehicleType] electric drive: motor curve " + string.Join(", ", Array.ConvertAll(MotorCurve, k => k.kmh + ":" + k.value))
+                       + ", gearing " + lv.diffGearing + ".");
         }
 
         private static bool RegisterWithFishNet(FishNetObject nob)

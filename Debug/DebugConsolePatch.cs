@@ -86,6 +86,9 @@ namespace Yesla.Debugging
                         Say("fleet              - Yesla owners, lock, sentry and running summons");
                         Say("summon / honk / lock / sentry - the phone controls, on the nearest own Yesla");
                         Say("claim [code]       - host: give the nearest Yesla to a player code (default: me)");
+                        Say("profile [chill|standard|madmax] - show or set the drive profile (same as the phone)");
+                        Say("zones              - every speed zone with its speed and size");
+                        Say("accel / phone [close] - full-throttle run with a speed trace / open the phone the way its key does");
                         break;
 
                     case "state":
@@ -260,6 +263,46 @@ namespace Yesla.Debugging
                     case "engage":
                         Say(Autopilot.Engage(out string why) ? "engaged. " + Autopilot.Describe() : "cannot engage: " + why);
                         break;
+
+                    case "phone":
+                    {
+                        // Opens the phone the way its key does (GameplayMenu.Open) after reading the key's own gate, so a
+                        // drive can be checked with the phone up.
+                        var menu = Il2CppScheduleOne.DevUtilities.Singleton<Il2CppScheduleOne.UI.GameplayMenu>.Instance;
+                        if (menu == null) { Say("phone: no GameplayMenu"); break; }
+                        var state = SceneState.ActiveState;
+                        string stateName = state != null ? state.ToString() : "-";
+                        bool accepts = menu.AcceptInputFromCurrentState();
+                        bool close = parts.Length > 2 && parts[2] == "close";
+                        if (close) menu.Close(); else if (!menu.IsOpen) menu.Open();
+                        Say("phone: state " + stateName + ", key accepted " + accepts + ", " + (close ? "closed" : "open " + menu.IsOpen) + ". " + Autopilot.Describe());
+                        break;
+                    }
+
+                    case "accel":
+                        Say(AccelTest.Start(Autopilot.CurrentCar()));
+                        break;
+
+                    case "profile":
+                        if (parts.Length > 2 && DriveProfile.Select(parts[2]) == null) { Say("profile: unknown '" + parts[2] + "' - chill, standard or madmax."); break; }
+                        Say("profile: " + DriveProfile.Current.Label + " (" + DriveProfile.Current.Id + ")"
+                            + (Autopilot.DrivenCar != null ? ", running drive " + (PathFollower.ProfileFor(Autopilot.DrivenCar)?.Label ?? "none") : ""));
+                        break;
+
+                    case "zones":
+                    {
+                        var zones = Il2CppScheduleOne.Vehicles.SpeedZone.speedZones;
+                        var sb = new System.Text.StringBuilder("zones: " + (zones?.Count ?? 0) + ", unmarked roads " + Il2CppScheduleOne.Vehicles.AI.VehicleAgent.UnmarkedSpeed + " km/h");
+                        for (int i = 0; zones != null && i < zones.Count; i++)
+                        {
+                            var z = zones[i];
+                            if (z == null || z.col == null) continue;
+                            Bounds b = z.col.bounds;
+                            sb.Append("\n  " + z.name + " " + z.speed + " km/h at " + b.center.ToString("F0") + " size " + b.size.ToString("F0"));
+                        }
+                        Say(sb.ToString());
+                        break;
+                    }
 
                     case "steer":
                     {

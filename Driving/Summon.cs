@@ -75,8 +75,9 @@ namespace Yesla.Driving
             Player local = Player.Local;
             if (local == null) return "No player.";
             Vector3 at = local.transform.position;
-            YeslaNet.ToHost("req.summon", Fleet.NetId(car).ToString(CultureInfo.InvariantCulture), Fleet.MyCode(), Vec(at));
-            Core.Log.Msg("[Summon] asked " + car.VehicleName + " #" + Fleet.NetId(car) + " to come to " + at.ToString("F0") + ".");
+            DriveProfile profile = DriveProfile.Current;
+            YeslaNet.ToHost("req.summon", Fleet.NetId(car).ToString(CultureInfo.InvariantCulture), Fleet.MyCode(), Vec(at), profile.Id);
+            Core.Log.Msg("[Summon] asked " + car.VehicleName + " #" + Fleet.NetId(car) + " to come to " + at.ToString("F0") + " (" + profile.Label + ").");
             return null;
         }
 
@@ -90,7 +91,8 @@ namespace Yesla.Driving
 
         // ---- host --------------------------------------------------------------------------------------------------
 
-        internal static void HostStart(int carId, string requester, Vector3 playerAt)
+        /// <param name="profileId">The requester's drive profile; an older client sends none and gets Standard.</param>
+        internal static void HostStart(int carId, string requester, Vector3 playerAt, string profileId)
         {
             LandVehicle car = Fleet.FindById(carId);
             if (car == null) { Report(carId, SummonState.Failed, "The car is gone."); Core.Log.Warning("[Summon] no car #" + carId + "."); return; }
@@ -129,7 +131,15 @@ namespace Yesla.Driving
 
             var job = new Job { Car = car, CarId = carId, Owner = requester, Target = playerAt, Started = Time.time };
             Jobs[carId] = job;
-            PathFollower.Attach(car, "Summon", reason => Finish(job, SummonState.Failed, reason == "stuck" ? "Your car got stuck." : "Summon stopped.", reason));
+            DriveProfile profile = DriveProfile.Find(profileId);
+            if (profile == null)
+            {
+                Core.Log.Msg("[Summon] request without a known drive profile ('" + profileId + "') - using Standard.");
+                profile = DriveProfile.Standard;
+            }
+            PathFollower.Attach(car, "Summon", profile, reason => Finish(job, SummonState.Failed,
+                reason == "stuck" ? "Your car got stuck." : reason == "checkpoint" ? "A police checkpoint blocks the way." : "Summon stopped.", reason),
+                driverless: true);
             Report(carId, SummonState.Coming, string.Empty);
             Core.Log.Msg("[Summon] " + car.VehicleName + " #" + carId + " drives to " + requester + " at " + playerAt.ToString("F0") + ", " + distance.ToString("F0") + " m away.");
 

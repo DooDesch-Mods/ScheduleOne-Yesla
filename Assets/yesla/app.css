@@ -114,6 +114,16 @@ body {
 .ctl.on:hover { background: var(--accent-hi); }
 .ctl.on:active { background: var(--accent-lo); }
 
+/* Drive profile: one segmented row, the active one filled. */
+.profiles { flex-direction: row; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg); border: 1px solid var(--line); }
+.prof {
+  flex: 1; height: 22px; border-radius: 5px; background: var(--bg); color: var(--muted);
+  font-size: 10px; font-weight: 600; align-items: center; justify-content: center;
+}
+.prof:hover { background: var(--raised); color: var(--text); }
+.prof.on { background: #2c2f35; color: var(--text); }
+.prof.on.mad { background: var(--warn); color: #ffffff; }
+
 .card { padding: 9px; gap: 3px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); }
 .card-label { font-size: 10px; color: var(--muted); }
 .card-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

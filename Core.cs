@@ -72,6 +72,7 @@ namespace Yesla
             Autopilot.Reset();
             Summon.Reset();
             PathFollower.Reset();
+            RoadRouter.Reset();
             Vehicle.Sentry.Reset();
             Vehicle.Fleet.Reset();
             DestinationMarker.Reset();
@@ -106,6 +107,9 @@ namespace Yesla
             Autopilot.LateTick();
             PathFollower.LateTick();
             Visual.Viz.LateTick();
+#if DEBUG
+            Debugging.AccelTest.LateTick();
+#endif
         }
     }
 }

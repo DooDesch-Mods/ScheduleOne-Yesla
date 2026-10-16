@@ -41,6 +41,7 @@ namespace Yesla.Phone
                 .OnCall("yesla.send.place", id => Guard("send.place", () => SendPlace(id)))
                 .OnCall("yesla.send.point", xy => Guard("send.point", () => SendPoint(xy)))
                 .OnCall("yesla.clear", _ => Guard("clear", Clear))
+                .OnCall("yesla.profile", id => Guard("profile", () => DriveProfile.Select(id) != null ? "ok" : "error:Unknown drive profile."))
                 .OnCall("yesla.summon", _ => Guard("summon", ToggleSummon))
                 .OnCall("yesla.honk", _ => Guard("honk", () => Answer(Remote.Honk(MyCar()))))
                 .OnCall("yesla.lock", _ => Guard("lock", () => Answer(Remote.ToggleLock(MyCar()))))
@@ -105,6 +106,14 @@ namespace Yesla.Phone
             _app.Emit("yesla.changed", "");
             if (state == SummonState.Arrived) _app.Notify("Yesla", message.Length > 0 ? message : "Your car is here.", 4f);
             else if (state == SummonState.Failed) _app.Notify("Yesla", message.Length > 0 ? message : "Summon stopped.", 4f);
+        }
+
+        /// <summary>A phone notification from the Yesla app.</summary>
+        internal static void Notify(string title, string text, float seconds)
+        {
+            if (_app == null) { Core.Log.Warning("[App] no app registered - notification '" + title + ": " + text + "' not shown."); return; }
+            _app.Notify(title, text, seconds);
+            Core.Log.Msg("[App] notification: " + title + ": " + text);
         }
 
         private static void OnSentryAlert(LandVehicle car, string kind)
@@ -190,6 +199,7 @@ namespace Yesla.Phone
                 .Prop("state", Autopilot.State.ToString())
                 .Prop("reason", Autopilot.LastReason)
                 .Prop("key", Preferences.EngageKey.ToString())
+                .Prop("profile", DriveProfile.Current.Id)
                 .Close();
 
             return j.Close().ToString();
@@ -290,6 +300,7 @@ namespace Yesla.Phone
                 h = h * 31 + Autopilot.LastReason.GetHashCode();
                 h = h * 31 + Fleet.Revision;
                 h = h * 31 + Summon.Revision;
+                h = h * 31 + DriveProfile.Current.Id.GetHashCode();
                 return h;
             }
         }

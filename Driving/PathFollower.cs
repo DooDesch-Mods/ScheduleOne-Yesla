@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using Il2CppScheduleOne.Math;
+using Il2CppScheduleOne.Police;
 using Il2CppScheduleOne.Vehicles;
 using Il2CppScheduleOne.Vehicles.AI;
 
@@ -16,8 +17,9 @@ namespace Yesla.Driving
     /// does not slow for the sharp junction turns the road graph produces, and its reverse manoeuvre hung in place,
     /// so the car ran off the road or sat behind a parked car for good.
     ///
-    /// Following is pure pursuit: aim at a point a speed-dependent distance ahead on the path, steer the arc that
-    /// needs, and cap the speed by how much the path bends ahead. On top of that two manoeuvres:
+    /// Following is pure pursuit: aim at a point a speed-dependent distance ahead on the path and steer the arc that
+    /// needs. The speed comes from <see cref="SpeedPlanner"/> with the driver's <see cref="DriveProfile"/>: bends,
+    /// the destination, slower zones and anything in the lane ahead, braked for in time. On top of that two manoeuvres:
     /// - Bypass: something that is not a traffic light and not a car in traffic blocks the lane for a few seconds
     ///   (a parked car, a bin) - shift the aim point to the left of the path and crawl past it.
     /// - Reverse: the car stands still although it wants to move, or the obstacle is too close to swing out - back
@@ -35,29 +37,18 @@ namespace Yesla.Driving
         /// <summary>Lookahead in metres: the minimum, how much it grows per m/s, and the cap.</summary>
         private const float MinLookahead = 4f;
         private const float LookaheadPerMs = 0.7f;
-        private const float MaxLookahead = 14f;
+        private const float MaxLookahead = 20f;
 
-        /// <summary>How far ahead the bend of the path is measured for the curve speed.</summary>
-        private const float CurveLookahead = 25f;
-
-        /// <summary>Speed for a 90 degree bend within the curve lookahead, in km/h.</summary>
-        private const float SpeedAt90 = 14f;
-
-        /// <summary>Slowest the curve speed goes, so a hairpin is still crawled through, in km/h.</summary>
-        private const float MinCurveSpeed = 8f;
+        /// <summary>The speed plan is redone this often; vanilla's agent ticks at 30 Hz.</summary>
+        private const float PlanSeconds = 0.1f;
 
         /// <summary>Closest-point search window around the last progress index, so a hairpin's return leg is not
         /// mistaken for progress.</summary>
         private const int SearchBack = 2;
         private const int SearchAhead = 25;
 
-        /// <summary>Waiting this long behind something that is neither a light nor traffic starts a bypass.</summary>
-        private const float WaitBeforeBypass = 4f;
         /// <summary>Heading error in degrees above which a reverse steers to turn the car, below it backs straight.</summary>
         private const float ReverseTurnAbove = 20f;
-
-        /// <summary>A car in traffic (its own AI driving) is waited for this long before it counts as stuck.</summary>
-        private const float WaitBehindTraffic = 25f;
 
         /// <summary>Standing still this long while wanting to move means the car is wedged.</summary>
         private const float WedgedSeconds = 1.5f;
@@ -78,6 +69,8 @@ namespace Yesla.Driving
 
         /// <summary>Reverse manoeuvres without 10 m of progress in between before the car is given up.</summary>
         private const int MaxReverses = 3;
+        /// <summary>An empty car waits this long at a closed police checkpoint before it gives up.</summary>
+        private const float CheckpointGiveUpSeconds = 10f;
         private const float ProgressResetsReverses = 10f;
 
         /// <summary>Everything one followed car carries between ticks.</summary>
@@ -86,6 +79,14 @@ namespace Yesla.Driving
             internal string Who;                   // "Assisted Driving" or "Summon", for the log
             internal LandVehicle Car;
             internal Action<string> GiveUp;        // called once when the car is stuck for good
+            internal DriveProfile Profile;
+            internal bool Driverless;              // nobody in the seat to talk the car through a police checkpoint
+            internal IntPtr CheckpointSeen;        // the checkpoint the car last stopped at, noticed once
+            internal float CheckpointWait;
+
+            internal float PlanKmh = SpeedPlanner.MinKmh;
+            internal string PlanWhy = string.Empty;
+            internal float NextPlan;
 
             internal PathSmoothingUtility.SmoothedPath Path;
             internal int Progress;
@@ -109,11 +110,57 @@ namespace Yesla.Driving
 
         private static readonly Dictionary<IntPtr, Follow> Cars = new Dictionary<IntPtr, Follow>();
 
-        /// <summary>Start steering <paramref name="car"/>. <paramref name="giveUp"/> runs when it is stuck for good.</summary>
-        internal static void Attach(LandVehicle car, string who, Action<string> giveUp)
+        /// <summary>Start steering <paramref name="car"/> with <paramref name="profile"/>. <paramref name="giveUp"/> runs
+        /// when it is stuck for good. A <paramref name="driverless"/> car gives up at a closed police checkpoint; with the
+        /// player in the seat it waits there for the search.</summary>
+        internal static void Attach(LandVehicle car, string who, DriveProfile profile, Action<string> giveUp, bool driverless = false)
         {
             if (car == null) { Core.Log.Warning("[PathFollower] attach for " + who + " with no car - nothing to steer."); return; }
-            Cars[car.Pointer] = new Follow { Who = who, GiveUp = giveUp, Car = car };
+            profile ??= DriveProfile.Standard;
+            Cars[car.Pointer] = new Follow { Who = who, GiveUp = giveUp, Car = car, Profile = profile, Driverless = driverless };
+            if (car.Agent != null) ApplyFlags(car.Agent, profile, profile.MaxKmh);
+            Core.Log.Msg("[PathFollower] " + who + " drives " + car.VehicleName + " with the " + profile.Label + " profile.");
+        }
+
+        /// <summary>Drive <paramref name="car"/> with <paramref name="profile"/> from its next tick on.</summary>
+        internal static void ChangeProfile(LandVehicle car, DriveProfile profile)
+        {
+            if (car == null || profile == null || !Cars.TryGetValue(car.Pointer, out Follow f)) { Core.Log.Warning("[PathFollower] profile change for a car that is not followed - nothing to change."); return; }
+            if (f.Profile == profile) return;
+            Core.Log.Msg("[PathFollower] " + f.Who + " switches from " + f.Profile.Label + " to " + profile.Label + ".");
+            f.Profile = profile;
+            f.NextPlan = 0f;
+            if (car.Agent != null) ApplyFlags(car.Agent, profile, f.PlanKmh);
+        }
+
+        /// <summary>The profile <paramref name="car"/> is followed with, or null when it is not followed.</summary>
+        internal static DriveProfile ProfileFor(LandVehicle car) =>
+            car != null && Cars.TryGetValue(car.Pointer, out Follow f) ? f.Profile : null;
+
+        /// <summary>The profile of the followed car whose road seeker is <paramref name="seeker"/>, or null.</summary>
+        internal static DriveProfile ProfileForRoadSeeker(IntPtr seeker)
+        {
+            foreach (Follow f in Cars.Values)
+            {
+                VehicleAgent agent = f.Car != null ? f.Car.Agent : null;
+                if (agent != null && agent.roadSeeker != null && agent.roadSeeker.Pointer == seeker) return f.Profile;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The agent's flags for a profile. The planner does the bend speeds, so vanilla's own turn slowdown is off;
+        /// a profile with no limit overrides the zone speed with the planned speed, so vanilla's obstacle slowdown
+        /// (a factor on the target) still has a sane speed to scale. Takes effect at the agent's next tick.
+        /// </summary>
+        private static void ApplyFlags(VehicleAgent agent, DriveProfile p, float plannedKmh)
+        {
+            DriveFlags flags = agent.Flags;
+            flags.TurnBasedSpeedReduction = false;
+            flags.IgnoreTrafficLights = p.IgnoreTrafficLights;
+            flags.SpeedLimitMultiplier = p.LimitFactor;
+            flags.OverrideSpeed = p.NoLimit;
+            if (p.NoLimit) flags.OverriddenSpeed = Mathf.Max(SpeedPlanner.MinKmh, plannedKmh);
         }
 
         internal static void Detach(LandVehicle car)
@@ -213,12 +260,19 @@ namespace Yesla.Driving
             float alpha = PursuitSteer(agent, car, target, out float steer);
             agent.targetSteerAngle_Normalized = steer;
 
-            // Curve speed from how much the path bends ahead, and a crawl while the car points well away from it.
-            float bend = PathUtility.CalculateAngleChangeOverPath(path, seg, lerp, CurveLookahead);
-            float curveSpeed = Mathf.Max(MinCurveSpeed, Mathf.Lerp(agent.targetSpeed, SpeedAt90, Mathf.Clamp01(bend / 90f)));
+            // Planned speed, and a crawl while the car points well away from the path.
+            if (now >= f.NextPlan)
+            {
+                f.NextPlan = now + PlanSeconds;
+                SpeedPlanner.Plan plan = SpeedPlanner.Run(car, agent, pts, seg, lerp, f.Profile);
+                f.PlanKmh = plan.Kmh;
+                f.PlanWhy = plan.Why;
+                ApplyFlags(agent, f.Profile, f.PlanKmh);
+            }
+            float planned = f.PlanKmh;
             float heading = Mathf.Abs(alpha) * Mathf.Rad2Deg;
-            if (heading > 35f) curveSpeed = Mathf.Min(curveSpeed, MinCurveSpeed);
-            if (curveSpeed < agent.targetSpeed) agent.targetSpeed = curveSpeed;
+            if (heading > 35f) planned = Mathf.Min(planned, SpeedPlanner.MinKmh);
+            if (planned < agent.targetSpeed) agent.targetSpeed = planned;
 
             if (f.Manoeuvre == Manoeuvre.Bypass)
             {
@@ -228,7 +282,7 @@ namespace Yesla.Driving
                 if (atBumper && Mathf.Abs(car.Speed_Kmh) < 1f)
                 {
                     f.WaitFor += dt;
-                    if (f.WaitFor >= WaitBeforeBypass)
+                    if (f.WaitFor >= f.Profile.WaitBeforeBypass)
                     {
                         Sensor s = NearestFront(agent);
                         f.BypassAfterReverse = true;
@@ -244,7 +298,8 @@ namespace Yesla.Driving
             CheckWedged(f, agent, car, dt);
 
             f.LastLine = f.Manoeuvre + " seg=" + seg + "/" + pts.Count + " look=" + lookahead.ToString("F1") + " alpha=" + heading.ToString("F0")
-                       + " steer=" + steer.ToString("F2") + " bend=" + bend.ToString("F0") + " target=" + agent.targetSpeed.ToString("F0")
+                       + " steer=" + steer.ToString("F2") + " plan=" + f.PlanKmh.ToString("F0") + " (" + f.PlanWhy + ") target=" + agent.targetSpeed.ToString("F0")
+                       + " speed=" + car.Speed_Kmh.ToString("F0") + " " + f.Profile.Id
                        + " offset=" + f.Offset.ToString("F1") + " wait=" + f.WaitFor.ToString("F1");
             LogLine(f, now);
         }
@@ -277,13 +332,15 @@ namespace Yesla.Driving
             if (blocker == null) { CheckSweepBlock(f, agent, car, dt); return; }
             f.SweepWait = 0f;
             Collider c = blocker.obstruction;
+            RoadCheckpoint checkpoint = c.GetComponentInParent<RoadCheckpoint>();
+            if (checkpoint != null) { WaitAtCheckpoint(f, checkpoint, dt); return; }
             if (LayerMask.LayerToName(c.gameObject.layer) == "VehicleObstacle") { f.WaitFor = 0f; return; }
 
             LandVehicle other = c.GetComponentInParent<LandVehicle>();
             bool traffic = other != null && other.Agent != null && other.Agent.AutoDriving;
 
             f.WaitFor += dt;
-            if (f.WaitFor < (traffic ? WaitBehindTraffic : WaitBeforeBypass)) return;
+            if (f.WaitFor < (traffic ? f.Profile.WaitBehindTraffic : f.Profile.WaitBeforeBypass)) return;
             f.WaitFor = 0f;
 
             string what = c.name + (other != null ? " (" + other.VehicleName + (traffic ? ", in traffic" : ", parked") + ")" : "");
@@ -296,6 +353,33 @@ namespace Yesla.Driving
             {
                 SetManoeuvre(f, Manoeuvre.Bypass, car.transform.position, "passing " + what);
             }
+        }
+
+        /// <summary>
+        /// A closed police checkpoint. Vanilla opens its gate on its own only for an NPC driver; a player gets out, asks
+        /// the officer for a search, and the gate opens when it is done (DialogueHandler_Police, CheckpointBehaviour).
+        /// With the player at the wheel the car waits for that; an empty car on its way to its owner gives up.
+        /// </summary>
+        private static void WaitAtCheckpoint(Follow f, RoadCheckpoint checkpoint, float dt)
+        {
+            f.WaitFor = 0f;
+            if (f.CheckpointSeen != checkpoint.Pointer)
+            {
+                f.CheckpointSeen = checkpoint.Pointer;
+                f.CheckpointWait = 0f;
+                Core.Log.Msg("[PathFollower] " + f.Who + " stopped at the closed police checkpoint " + checkpoint.name + " at "
+                           + checkpoint.transform.position.ToString("F0") + (f.Driverless ? " with nobody in the car." : " - waiting for the search."));
+                if (!f.Driverless) Phone.YeslaApp.Notify("Police checkpoint", "Talk to the officer to pass.", 6f);
+                return;
+            }
+            if (!f.Driverless) return;
+            f.CheckpointWait += dt;
+            if (f.CheckpointWait < CheckpointGiveUpSeconds) return;
+            Core.Log.Warning("[PathFollower] " + f.Who + " waited " + CheckpointGiveUpSeconds + " s at the police checkpoint " + checkpoint.name + " - giving up.");
+            Action<string> giveUp = f.GiveUp;
+            f.GiveUp = null;
+            if (giveUp != null) giveUp("checkpoint");
+            else Core.Log.Warning("[PathFollower] " + f.Who + " already gave up - nothing more to stop.");
         }
 
         /// <summary>
@@ -315,7 +399,7 @@ namespace Yesla.Driving
             }
 
             f.SweepWait += dt;
-            if (f.SweepWait < WaitBeforeBypass) return;
+            if (f.SweepWait < f.Profile.WaitBeforeBypass) return;
             f.SweepWait = 0f;
 
             float steer = car.CurrentSteerAngle;
@@ -332,7 +416,7 @@ namespace Yesla.Driving
             string what = hit.collider != null
                 ? hit.collider.name + " (layer " + LayerMask.LayerToName(hit.collider.gameObject.layer) + ") at " + dist.ToString("F1") + " m by the " + (dl <= dr ? "left" : "right") + " front wheel"
                 : "nothing the sweep can see";
-            Core.Log.Warning("[PathFollower] held at 0 km/h for " + WaitBeforeBypass + " s with no front sensor hit; wheel sweep: " + what
+            Core.Log.Warning("[PathFollower] held at 0 km/h for " + f.Profile.WaitBeforeBypass + " s with no front sensor hit; wheel sweep: " + what
                            + ", reduction min=" + agent.speedReductionTracker.GetLowestValue().ToString("F2"));
             f.BypassAfterReverse = hit.collider != null;
             StartReverse(f, car, "blocked by " + what);

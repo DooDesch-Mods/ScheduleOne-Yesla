@@ -1,5 +1,7 @@
 // Yesla. Pick a destination on the map or in the list, send it to the car, then press the engage key in the driver
-// seat. The control row calls the car to the player, honks and flashes it, locks it and switches Sentry Mode. Everything the page shows comes from two calls: yesla.state (player, car, destination, drive state) and
+// seat. The control row calls the car to the player, honks and flashes it, locks it and switches Sentry Mode; the
+// profile row picks how the car drives (Chill, Standard, Mad Max). Everything the page shows comes from two calls:
+// yesla.state (player, car, destination, drive state and profile) and
 // yesla.places (the map's markers). The mod pushes yesla.changed / yesla.places when either changes.
 
 var WORLD = 1250.8;      // the map picture in css px at zoom 1
@@ -23,7 +25,8 @@ var placesEl = $('places');
 var listEl = $('list');
 var tagEl = $('tag');
 
-var state = { image: false, player: null, car: null, dest: null, drive: { state: 'Off', reason: '', key: 'Y' } };
+var state = { image: false, player: null, car: null, dest: null, drive: { state: 'Off', reason: '', key: 'Y', profile: 'standard' } };
+var PROFILES = ['chill', 'standard', 'madmax'];
 var places = [];
 var selected = null;     // { type: 'place'|'point', id, label, x, y } - chosen but not sent yet
 var query = '';
@@ -210,6 +213,16 @@ function renderControls() {
   sentry.className = mine && car.sentry ? 'ctl on' : 'ctl';
 }
 
+function renderProfiles() {
+  var current = (state.drive && state.drive.profile) || 'standard';
+  for (var i = 0; i < PROFILES.length; i++) {
+    var id = PROFILES[i];
+    var cls = 'prof';
+    if (id === current) cls += id === 'madmax' ? ' on mad' : ' on';
+    $('p-' + id).className = cls;
+  }
+}
+
 function control(call, arg) {
   var r = s1.call(call, arg || '');
   if (r !== 'ok') { flash(r && r.indexOf('error:') === 0 ? r.substring(6) : 'The car did not answer.'); return; }
@@ -218,6 +231,7 @@ function control(call, arg) {
   renderMarks();
   renderHead();
   renderControls();
+  renderProfiles();
 }
 
 function renderHead() {
@@ -359,6 +373,7 @@ function renderAll() {
   renderMarks();
   renderHead();
   renderControls();
+  renderProfiles();
   renderCard();
   renderList();
 }
@@ -369,6 +384,9 @@ $('c-honk').addEventListener('click', function () { control('yesla.honk'); });
 $('c-lock').addEventListener('click', function () { control('yesla.lock'); });
 $('c-sentry').addEventListener('click', function () { control('yesla.sentry'); });
 $('clear').addEventListener('click', clear);
+PROFILES.forEach(function (id) {
+  $('p-' + id).addEventListener('click', function () { control('yesla.profile', id); });
+});
 
 $('search').addEventListener('input', function (e) {
   query = (e.value !== undefined ? e.value : $('search').value) || '';
@@ -416,6 +434,7 @@ s1.on('yesla.changed', function () {
   renderMarks();
   renderHead();
   renderControls();
+  renderProfiles();
   renderCard();
 });
 

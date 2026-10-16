@@ -84,7 +84,7 @@ namespace Yesla.Driving
 
             // State first: a route that cannot be found reports Failed synchronously from inside Navigate.
             _car = car;
-            PathFollower.Attach(car, "Assisted Driving", Disengage);
+            PathFollower.Attach(car, "Assisted Driving", DriveProfile.Current, Disengage);
             SetState(DriveState.Driving, "engaged towards " + DestinationLabel);
             Navigate(car);
             why = State == DriveState.Driving ? string.Empty : LastReason;
@@ -156,7 +156,7 @@ namespace Yesla.Driving
                 if (!current.LocalPlayerIsDriver) { Disengage("left the driver seat"); return; }
             }
 
-            if (GameInput.IsTyping) return;
+            if (GameInput.IsTyping || PhoneOpen()) return;
             if (!Input.GetKeyDown(Preferences.EngageKey)) return;
             if (State == DriveState.Driving) { Disengage("engage key pressed"); return; }
             if (!Engage(out string why)) Core.Log.Msg("[Autopilot] cannot engage: " + why);
@@ -164,15 +164,31 @@ namespace Yesla.Driving
 
         /// <summary>
         /// Called from OnLateUpdate. The player's input is still read while the agent drives - the car just ignores
-        /// it - so any deliberate input counts as taking over.
+        /// it - so any deliberate input counts as taking over. With the phone open the car ignores the driving keys
+        /// in vanilla too, so they do not take over then.
         /// </summary>
         internal static void LateTick()
         {
             if (State != DriveState.Driving || _car == null) return;
+            if (PhoneOpen())
+            {
+                if (!_phoneWasOpen) Core.Log.Msg("[Autopilot] phone open - driving keys do not take over until it closes.");
+                _phoneWasOpen = true;
+                return;
+            }
+            if (_phoneWasOpen) { _phoneWasOpen = false; Core.Log.Msg("[Autopilot] phone closed - driving keys take over again."); }
             Vector2 motion = GameInput.MotionAxis;
             if (Mathf.Abs(motion.x) > TakeoverThreshold) { Disengage("steering input"); return; }
             if (Mathf.Abs(GameInput.VehicleDriveAxis) > TakeoverThreshold) { Disengage("throttle or brake input"); return; }
             if (GameInput.GetButton(GameInput.ButtonCode.VehicleHandbrake)) Disengage("handbrake");
+        }
+
+        private static bool _phoneWasOpen;
+
+        private static bool PhoneOpen()
+        {
+            return PlayerSingleton<Il2CppScheduleOne.UI.Phone.Phone>.InstanceExists
+                && PlayerSingleton<Il2CppScheduleOne.UI.Phone.Phone>.Instance.IsOpen;
         }
 
         internal static string Describe()
