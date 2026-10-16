@@ -125,6 +125,7 @@ namespace Yesla
             Visual.Viz.LateTick();
 #if DEBUG
             Debugging.AccelTest.LateTick();
+            Debugging.FrameBurst.LateTick();
             Debugging.JitterProbe.Own.Stop();
             Debugging.JitterProbe.LateTick();
 #endif

@@ -92,6 +92,7 @@ namespace Yesla.Debugging
                         Say("zones              - every speed zone with its speed and size");
                         Say("accel / phone [close] - full-throttle run with a speed trace / open the phone the way its key does");
                         Say("jitter [seconds] - frame times, physics steps and position jumps of the car you sit in");
+                        Say("frames [count] - saves that many consecutive frames to UserData/YeslaFrames");
                         break;
 
                     case "state":
@@ -301,6 +302,14 @@ namespace Yesla.Debugging
                     case "accel":
                         Say(AccelTest.Start(Autopilot.CurrentCar()));
                         break;
+
+                    case "frames":
+                    {
+                        int count = 40;
+                        if (parts.Length > 2 && !int.TryParse(parts[2], out count)) { Say("frames: '" + parts[2] + "' is not a number."); break; }
+                        Say(FrameBurst.Start(count));
+                        break;
+                    }
 
                     case "jitter":
                     {
@@ -593,8 +602,11 @@ namespace Yesla.Debugging
                     {
                         LandVehicle car = Autopilot.CurrentCar();
                         if (car == null) { Say("exit: not in a car"); break; }
+                        // The open phone sits above the seat on the state stack and would swallow the pop.
+                        var exitMenu = Il2CppScheduleOne.DevUtilities.Singleton<Il2CppScheduleOne.UI.GameplayMenu>.Instance;
+                        if (exitMenu != null && exitMenu.IsOpen) { exitMenu.Close(); Say("exit: closed the phone first"); }
                         car.ExitVehicle();
-                        Say("exit: left " + car.VehicleName);
+                        Say("exit: asked to leave " + car.VehicleName + " - 'yesla cars' shows whether it is still occupied");
                         break;
                     }
 
