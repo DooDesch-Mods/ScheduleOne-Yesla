@@ -26,6 +26,8 @@ namespace Yesla
             Log = LoggerInstance;
 
             Preferences.Initialize();
+            Net.YeslaNet.Apply(HarmonyInstance);
+            Net.Remote.Init();
             Phone.YeslaApp.Register();
 
             // No PatchAll here: MelonLoader applies the [HarmonyPatch] classes of a MelonMod itself, and a second
@@ -68,6 +70,10 @@ namespace Yesla
         private static void ResetWorld()
         {
             Autopilot.Reset();
+            Summon.Reset();
+            PathFollower.Reset();
+            Vehicle.Sentry.Reset();
+            Vehicle.Fleet.Reset();
             DestinationMarker.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
@@ -81,7 +87,10 @@ namespace Yesla
             Debugging.ConsoleRegistration.EnsureRegistered();
             Debugging.DebugConsolePatch.FlushToConsole();
 #endif
+            Vehicle.Fleet.Tick();
             Autopilot.Tick();
+            Summon.Tick();
+            Vehicle.Sentry.Tick();
             DestinationMarker.Tick();
             FirstPerson.Tick();
             KeyHint.Tick();
@@ -93,6 +102,7 @@ namespace Yesla
             if (!_inWorld) return;
             // After VehicleAgent.LateUpdate has written its overrides; reads the driver's own input for a takeover.
             Autopilot.LateTick();
+            PathFollower.LateTick();
         }
     }
 }

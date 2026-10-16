@@ -3,17 +3,19 @@ using Il2CppScheduleOne.Vehicles;
 using Sideload.Api;
 using Yesla.Config;
 using Yesla.Driving;
+using Yesla.Net;
 using Yesla.Vehicle;
 
 namespace Yesla.Phone
 {
     /// <summary>
-    /// The Yesla phone app: a map with the player, the car and the destination, a list of places, and "Send to
-    /// car". Rendered by Sideload from <c>Assets/yesla/</c>; without Sideload every call here is a no-op and the
-    /// car still drives through the console and the engage key.
+    /// The Yesla phone app: a map with the player, the car and the destination, a list of places, "Send to car",
+    /// and the remote controls (Summon, Honk, Lock, Sentry). Rendered by Sideload from <c>Assets/yesla/</c>;
+    /// without Sideload every call here is a no-op and the car still drives through the console and the engage key.
     ///
     /// The destination is the local player's: whoever sends it is the one who drives, on their own machine, so a
-    /// co-op client needs no network call to use it.
+    /// co-op client needs no network call to use it. The remote controls go through the host, which checks that
+    /// the asking player owns the car.
     /// </summary>
     internal static class YeslaApp
     {
@@ -21,10 +23,13 @@ namespace Yesla.Phone
 
         private const float PulseSeconds = 0.25f;
         private const float PlacesSeconds = 5f;
+        private const float IconSeconds = 2f;
 
         private static AppHandle _app;
         private static float _nextPulse;
         private static float _nextPlaces;
+        private static float _nextIcon;
+        private static bool? _iconShown;
         private static int _pushedState = int.MinValue;
         private static int _pushedPlaces = int.MinValue;
 
@@ -35,7 +40,13 @@ namespace Yesla.Phone
                 .OnCall("yesla.places", _ => Guard("places", PlacesJson))
                 .OnCall("yesla.send.place", id => Guard("send.place", () => SendPlace(id)))
                 .OnCall("yesla.send.point", xy => Guard("send.point", () => SendPoint(xy)))
-                .OnCall("yesla.clear", _ => Guard("clear", Clear));
+                .OnCall("yesla.clear", _ => Guard("clear", Clear))
+                .OnCall("yesla.summon", _ => Guard("summon", ToggleSummon))
+                .OnCall("yesla.honk", _ => Guard("honk", () => Answer(Remote.Honk(MyCar()))))
+                .OnCall("yesla.lock", _ => Guard("lock", () => Answer(Remote.ToggleLock(MyCar()))))
+                .OnCall("yesla.sentry", _ => Guard("sentry", () => Answer(Remote.ToggleSentry(MyCar()))));
+            Summon.MineChanged += OnSummonChanged;
+            Sentry.Alerted += OnSentryAlert;
             Core.Log.Msg(Apps.Available
                 ? "[App] registered with Sideload."
                 : "[App] Sideload not loaded yet - the Yesla app registration is queued.");
@@ -49,6 +60,7 @@ namespace Yesla.Phone
             _nextPulse = now + PulseSeconds;
 
             MapPicture.Ensure(_app);
+            UpdateIcon(now);
             if (!_app.IsOnScreen) return;
 
             int state = Revision();
@@ -72,14 +84,46 @@ namespace Yesla.Phone
             }
         }
 
+        /// <summary>The app is on the home screen only while the local player owns a Yesla.</summary>
+        private static void UpdateIcon(float now)
+        {
+            if (now < _nextIcon) return;
+            _nextIcon = now + IconSeconds;
+            bool owns = Fleet.MyCars().Count > 0;
+            // Stated again every few seconds: a phone rebuild puts the icon back to its default.
+            _app.Icon(owns);
+            if (owns == _iconShown) return;
+            _iconShown = owns;
+            Core.Log.Msg(owns
+                ? "[App] the local player owns a Yesla - the app is on the phone."
+                : "[App] the local player owns no Yesla - the app is hidden.");
+        }
+
+        private static void OnSummonChanged(LandVehicle car, SummonState state, string message)
+        {
+            if (_app == null) return;
+            _app.Emit("yesla.changed", "");
+            if (state == SummonState.Arrived) _app.Notify("Yesla", message.Length > 0 ? message : "Your car is here.", 4f);
+            else if (state == SummonState.Failed) _app.Notify("Yesla", message.Length > 0 ? message : "Summon stopped.", 4f);
+        }
+
+        private static void OnSentryAlert(LandVehicle car, string kind)
+        {
+            if (_app == null) return;
+            _app.Notify("Sentry Mode", kind == "hit" ? "Something hit your Yesla." : "Someone is at your Yesla.", 5f);
+            _app.Emit("yesla.changed", "");
+        }
+
         internal static void Reset()
         {
             MapPicture.Reset();
             _pushedState = int.MinValue;
             _pushedPlaces = int.MinValue;
+            _iconShown = null;
+            _nextIcon = 0f;
         }
 
-        /// <summary>The Yesla this player is sitting in, the one Assisted Driving steers, or the nearest owned one.</summary>
+        /// <summary>The Yesla this player is sitting in, the one Assisted Driving steers, or the nearest one they own.</summary>
         internal static LandVehicle MyCar()
         {
             LandVehicle sitting = Autopilot.CurrentCar();
@@ -87,15 +131,11 @@ namespace Yesla.Phone
             if (Autopilot.DrivenCar != null) return Autopilot.DrivenCar;
 
             Player local = Player.Local;
-            var all = NetworkSingleton<VehicleManager>.InstanceExists ? NetworkSingleton<VehicleManager>.Instance.AllVehicles : null;
-            if (local == null || all == null) return null;
+            if (local == null) return null;
             LandVehicle best = null;
             float bestDist = float.MaxValue;
-            for (int i = 0; i < all.Count; i++)
+            foreach (var v in Fleet.MyCars())
             {
-                var v = all[i];
-                // IsPlayerOwned is replicated; PlayerOwnedVehicles is only filled on the host.
-                if (v == null || !v.IsPlayerOwned || !IsYesla(v)) continue;
                 float d = Vector3.Distance(local.transform.position, v.transform.position);
                 if (d < bestDist) { bestDist = d; best = v; }
             }
@@ -119,15 +159,21 @@ namespace Yesla.Phone
             LandVehicle car = MyCar();
             if (car != null && MapGeo.TryNormalise(car.transform.position, out double cx, out double cy))
             {
+                Fleet.Rec rec = Fleet.For(car);
                 j.Key("car").Open()
                     .Prop("x", cx).Prop("y", cy).Prop("h", car.transform.eulerAngles.y)
                     .Prop("name", car.VehicleName)
                     .Prop("speed", Mathf.Abs(car.Speed_Kmh))
                     .Prop("inside", Autopilot.CurrentCar() != null && Autopilot.CurrentCar().Pointer == car.Pointer)
                     .Prop("distance", local != null ? Vector3.Distance(local.transform.position, car.transform.position) : 0)
+                    .Prop("mine", Fleet.IsMine(car))
+                    .Prop("locked", rec != null && rec.Locked)
+                    .Prop("sentry", rec != null && rec.Sentry)
                     .Close();
+                var summon = Summon.StatusOf(car);
+                j.Key("summon").Open().Prop("state", summon.state.ToString()).Prop("reason", summon.reason).Close();
             }
-            else j.Null("car");
+            else { j.Null("car"); j.Null("summon"); }
 
             if (Autopilot.Destination.HasValue && MapGeo.TryNormalise(Autopilot.Destination.Value, out double dx, out double dy))
             {
@@ -197,6 +243,22 @@ namespace Yesla.Phone
             return "ok";
         }
 
+        /// <summary>Summon while the car is not coming, stop it while it is.</summary>
+        private static string ToggleSummon()
+        {
+            LandVehicle car = MyCar();
+            bool coming = car != null && Summon.StatusOf(car).state == SummonState.Coming;
+            return Answer(coming ? Summon.Cancel(car) : Summon.Request(car));
+        }
+
+        /// <summary>A refusal reason becomes the page's "error:" answer, null becomes "ok".</summary>
+        private static string Answer(string refused)
+        {
+            if (refused == null) return "ok";
+            Core.Log.Msg("[App] refused on the phone: " + refused);
+            return "error:" + refused;
+        }
+
         /// <summary>
         /// Changes quantised, so the pulse does not rebuild the page for a car that only creeps. Includes everything
         /// the state JSON shows.
@@ -226,6 +288,8 @@ namespace Yesla.Phone
                 h = h * 31 + (int)Autopilot.State;
                 h = h * 31 + (Autopilot.Destination.HasValue ? Autopilot.Destination.Value.GetHashCode() : 0);
                 h = h * 31 + Autopilot.LastReason.GetHashCode();
+                h = h * 31 + Fleet.Revision;
+                h = h * 31 + Summon.Revision;
                 return h;
             }
         }

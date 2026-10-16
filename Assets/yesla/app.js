@@ -1,5 +1,5 @@
 // Yesla. Pick a destination on the map or in the list, send it to the car, then press the engage key in the driver
-// seat. Everything the page shows comes from two calls: yesla.state (player, car, destination, drive state) and
+// seat. The control row calls the car to the player, honks and flashes it, locks it and switches Sentry Mode. Everything the page shows comes from two calls: yesla.state (player, car, destination, drive state) and
 // yesla.places (the map's markers). The mod pushes yesla.changed / yesla.places when either changes.
 
 var WORLD = 1250.8;      // the map picture in css px at zoom 1
@@ -176,6 +176,50 @@ function flash(text) {
 
 // ---- side column -----------------------------------------------------------------------------------------------
 
+function summonLine() {
+  var m = state.summon || {};
+  switch (m.state) {
+    case 'Coming':
+      var parts = ['Summon'];
+      if (state.car) parts.push(Math.round(state.car.speed) + ' km/h');
+      if (state.car) parts.push(metres(state.car.distance) + ' away');
+      return parts.join(' · ');
+    case 'Arrived': return 'Your car is here.';
+    case 'Failed': return m.reason || 'Summon stopped.';
+    default: return '';
+  }
+}
+
+function renderControls() {
+  var car = state.car;
+  var mine = !!(car && car.mine);
+  var coming = state.summon && state.summon.state === 'Coming';
+  var summon = $('c-summon'), honk = $('c-honk'), lock = $('c-lock'), sentry = $('c-sentry');
+
+  summon.disabled = !mine || car.inside;
+  summon.textContent = coming ? 'Stop' : 'Summon';
+  summon.className = coming ? 'ctl on' : 'ctl';
+
+  honk.disabled = !mine;
+
+  lock.disabled = !mine;
+  lock.textContent = mine && car.locked ? 'Unlock' : 'Lock';
+  lock.className = mine && car.locked ? 'ctl on' : 'ctl';
+
+  sentry.disabled = !mine;
+  sentry.className = mine && car.sentry ? 'ctl on' : 'ctl';
+}
+
+function control(call, arg) {
+  var r = s1.call(call, arg || '');
+  if (r !== 'ok') { flash(r && r.indexOf('error:') === 0 ? r.substring(6) : 'The car did not answer.'); return; }
+  flash('');
+  read();
+  renderMarks();
+  renderHead();
+  renderControls();
+}
+
 function renderHead() {
   var line = $('car-line');
   if (!state.car) {
@@ -187,6 +231,13 @@ function renderHead() {
   $('car-name').textContent = state.car.name;
   var driving = state.drive && state.drive.state === 'Driving';
   if (driving) { line.textContent = 'Assisted Driving'; line.className = 'sub live'; return; }
+  var summoned = summonLine();
+  if (summoned) {
+    var st = state.summon.state;
+    line.textContent = summoned;
+    line.className = st === 'Failed' ? 'sub warn' : 'sub live';
+    return;
+  }
   line.className = 'sub';
   if (state.car.inside) line.textContent = state.car.speed > 2 ? Math.round(state.car.speed) + ' km/h' : 'Parked';
   else line.textContent = 'Parked · ' + metres(state.car.distance) + ' away';
@@ -307,11 +358,16 @@ function clear() {
 function renderAll() {
   renderMarks();
   renderHead();
+  renderControls();
   renderCard();
   renderList();
 }
 
 $('send').addEventListener('click', send);
+$('c-summon').addEventListener('click', function () { control('yesla.summon'); });
+$('c-honk').addEventListener('click', function () { control('yesla.honk'); });
+$('c-lock').addEventListener('click', function () { control('yesla.lock'); });
+$('c-sentry').addEventListener('click', function () { control('yesla.sentry'); });
 $('clear').addEventListener('click', clear);
 
 $('search').addEventListener('input', function (e) {
@@ -359,6 +415,7 @@ s1.on('yesla.changed', function () {
   read();
   renderMarks();
   renderHead();
+  renderControls();
   renderCard();
 });
 

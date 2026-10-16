@@ -73,11 +73,15 @@ namespace Yesla.Debugging
                         Say("clear              - forget the destination");
                         Say("spawn [code] [m] [yaw] - spawn a player-owned car ahead (default hounddog, 8 m, yaw 0)");
                         Say("enter              - get into the nearest owned car within 10 m");
+                        Say("use                - hover and interact with the nearest owned car, like the E key");
                         Say("tp <x> <y> <z>     - move the local player (works on a client too)");
                         Say("tograph            - put the car onto the nearest road (vanilla teleporter)");
                         Say("diag               - road AI internals: target speed, throttle, sensors, path");
                         Say("path [from] [n]    - the planned path points (x,z) with sharp turns marked");
                         Say("agentdebug [off]   - vanilla agent debug logging (obstacles, speed multipliers)");
+                        Say("fleet              - Yesla owners, lock, sentry and running summons");
+                        Say("summon / honk / lock / sentry - the phone controls, on the nearest own Yesla");
+                        Say("claim [code]       - host: give the nearest Yesla to a player code (default: me)");
                         break;
 
                     case "state":
@@ -107,6 +111,53 @@ namespace Yesla.Debugging
                                 + v.OwnerId + " occupied=" + v.IsOccupied + " autoDriving=" + (v.Agent != null && v.Agent.AutoDriving));
                         }
                         Say("cars: " + shown + " player-owned of " + all.Count);
+                        break;
+                    }
+
+                    case "fleet":
+                        Say(Vehicle.Fleet.Describe());
+                        Say(Summon.Describe());
+                        break;
+
+                    case "summon":
+                    {
+                        var car = Phone.YeslaApp.MyCar();
+                        bool coming = car != null && Summon.StatusOf(car).state == SummonState.Coming;
+                        string refused = coming ? Summon.Cancel(car) : Summon.Request(car);
+                        Say(refused ?? (coming ? "summon: asked to stop" : "summon: asked to come"));
+                        break;
+                    }
+
+                    case "honk":
+                        Say(Net.Remote.Honk(Phone.YeslaApp.MyCar()) ?? "honk: sent");
+                        break;
+
+                    case "lock":
+                        Say(Net.Remote.ToggleLock(Phone.YeslaApp.MyCar()) ?? "lock: toggle sent");
+                        break;
+
+                    case "sentry":
+                        Say(Net.Remote.ToggleSentry(Phone.YeslaApp.MyCar()) ?? "sentry: toggle sent");
+                        break;
+
+                    case "claim":
+                    {
+                        string code = parts.Length > 2 ? parts[2] : Vehicle.Fleet.MyCode();
+                        Player me = Player.Local;
+                        LandVehicle best = null;
+                        float bestDist = float.MaxValue;
+                        var all = NetworkSingleton<VehicleManager>.Instance?.AllVehicles;
+                        if (all == null || me == null) { Say("claim: no VehicleManager or player"); break; }
+                        for (int i = 0; i < all.Count; i++)
+                        {
+                            var v = all[i];
+                            if (v == null || !Phone.YeslaApp.IsYesla(v)) continue;
+                            float d = Vector3.Distance(v.transform.position, me.transform.position);
+                            if (d < bestDist) { bestDist = d; best = v; }
+                        }
+                        if (best == null) { Say("claim: no Yesla in the world"); break; }
+                        Vehicle.Fleet.Claim(best, code, "console claim");
+                        Say("claim: " + Vehicle.Fleet.Describe(best));
                         break;
                     }
 
@@ -232,8 +283,39 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "walkaway":
+                    {
+                        // Puts the player down the road ahead of the nearest own Yesla, for a summon test.
+                        float metres = 120f;
+                        if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out metres);
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("walkaway: no own Yesla"); break; }
+                        Vector3 to = car.transform.position + car.transform.forward * metres + Vector3.up * 30f;
+                        if (Physics.Raycast(to, Vector3.down, out RaycastHit hit, 80f)) to = hit.point + Vector3.up * 1.2f;
+                        else { Say("walkaway: no ground under " + to.ToString("F0")); break; }
+                        PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance.Teleport(to, false);
+                        Say("walkaway: player at " + to.ToString("F1") + ", " + Vector3.Distance(to, car.transform.position).ToString("F0") + " m from the car");
+                        break;
+                    }
+
+                    case "dropon":
+                    {
+                        // Spawns a Hounddog 4 m above the nearest own Yesla; the fall is a Sentry hit.
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("dropon: no own Yesla"); break; }
+                        NetworkSingleton<VehicleManager>.Instance.SpawnVehicle("hounddog", car.transform.position + Vector3.up * 4f, car.transform.rotation, true);
+                        Say("dropon: a hounddog falls onto " + car.VehicleName + " #" + Vehicle.Fleet.NetId(car));
+                        break;
+                    }
+
                     case "navcheck":
-                        NavCheck.Run();
+                        // 'navcheck x y z' checks the route from the nearest own Yesla to that point.
+                        if (parts.Length > 4
+                            && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float nx)
+                            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float ny)
+                            && float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float nz))
+                            NavCheck.Run(Phone.YeslaApp.MyCar(), new Vector3(nx, ny, nz));
+                        else NavCheck.Run();
                         Say("navcheck runs - see the [NavCheck] lines in the log");
                         break;
 
@@ -276,6 +358,8 @@ namespace Yesla.Debugging
                         float yaw = 0f;
                         if (parts.Length > 4) float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out yaw);
                         Quaternion rot = Quaternion.LookRotation(fwd) * Quaternion.Euler(0f, yaw, 0f);
+                        // A Yesla spawned here belongs to whoever spawned it, as if they had bought it.
+                        if (code == Vehicle.YeslaVehicleType.Code) Net.YeslaNet.ToHost("req.bought", Vehicle.Fleet.MyCode());
                         NetworkSingleton<VehicleManager>.Instance.SpawnVehicle(code, pos, rot, true);
                         Say("asked the server for a '" + code + "' at " + pos.ToString("F1"));
                         break;
@@ -296,6 +380,27 @@ namespace Yesla.Debugging
                         if (car == null) { Say("no player-owned car within 10 m"); break; }
                         car.EnterVehicle();
                         Say("entering " + car.VehicleName);
+                        break;
+                    }
+
+                    case "exit":
+                    {
+                        LandVehicle car = Autopilot.CurrentCar();
+                        if (car == null) { Say("exit: not in a car"); break; }
+                        car.ExitVehicle();
+                        Say("exit: left " + car.VehicleName);
+                        break;
+                    }
+
+                    case "use":
+                    {
+                        // The player's own way in: the hover prompt, then the interact press, as with the E key.
+                        LandVehicle car = NearestOwnedCar(10f);
+                        if (car == null) { Say("no player-owned car within 10 m"); break; }
+                        car.Hovered();
+                        Say("use: prompt '" + car.intObj.message + "' state=" + car.intObj.interactionState);
+                        car.Interacted();
+                        Say("use: interacted with " + car.VehicleName + " - 'yesla probe' shows the seat");
                         break;
                     }
 
@@ -346,7 +451,7 @@ namespace Yesla.Debugging
             sb.Append(" override=").Append(car.overrideControls);
             sb.Append(" reversing=").Append(a.IsReversing).Append("/").Append(a.reverseCoroutine != null);
             sb.Append(" kinematic=").Append(a.KinematicMode);
-            sb.Append(" follower=[").Append(PathFollower.LastLine).Append("]");
+            sb.Append(" follower=[").Append(PathFollower.LastLineFor(Autopilot.DrivenCar)).Append("]");
             sb.Append(" targetSteer=").Append(a.targetSteerAngle_Normalized.ToString("F2", ci));
             sb.Append(" turn(min/range/thr/div)=").Append(a.minTurningSpeed.ToString("F0", ci)).Append("/")
               .Append(a.turnSpeedReductionRange.ToString("F0", ci)).Append("/").Append(a.minTurnSpeedReductionAngleThreshold.ToString("F0", ci))

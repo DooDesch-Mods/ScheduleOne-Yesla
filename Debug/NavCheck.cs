@@ -26,6 +26,13 @@ namespace Yesla.Debugging
             MelonCoroutines.Start(Steps(car.Agent, Autopilot.Destination.Value));
         }
 
+        /// <summary>The same steps for any car and target, e.g. a summon the road AI refused.</summary>
+        internal static void Run(LandVehicle car, Vector3 dest)
+        {
+            if (car == null || car.Agent == null) { Core.Log.Warning("[NavCheck] no car with a road AI."); return; }
+            MelonCoroutines.Start(Steps(car.Agent, dest));
+        }
+
         private static IEnumerator Steps(VehicleAgent agent, Vector3 dest)
         {
             Vector3 start = agent.frontOfVehiclePosition;

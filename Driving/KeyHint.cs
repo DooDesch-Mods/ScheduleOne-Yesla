@@ -31,7 +31,8 @@ namespace Yesla.Driving
         {
             LandVehicle car = Autopilot.CurrentCar();
             bool inYesla = car != null && Phone.YeslaApp.IsYesla(car);
-            bool driver = inYesla && car.LocalPlayerIsDriver;
+            // Assisted Driving answers only its owner, so only the owner at the wheel is shown the key.
+            bool driver = inYesla && car.LocalPlayerIsDriver && Vehicle.Fleet.IsMine(car);
             string want = inYesla ? Signature(driver) : null;
             InputPromptsManager prompts = Singleton<InputPromptsManager>.Instance;
             // Vanilla screens (character creator, menus) can clear the hint modules behind our back; put it back.

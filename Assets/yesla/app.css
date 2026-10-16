@@ -100,6 +100,19 @@ body {
 .title { font-size: 16px; font-weight: 700; }
 .sub { font-size: 11px; color: var(--muted); }
 .sub.live { color: var(--ok); }
+.sub.warn { color: var(--warn); }
+
+.controls { flex-direction: row; gap: 5px; }
+.ctl {
+  flex: 1; height: 26px; padding: 0 4px; border-radius: 6px; background: #2c2f35; color: var(--text);
+  font-size: 10px; font-weight: 600; align-items: center; justify-content: center;
+}
+.ctl:hover { background: #363a41; }
+.ctl:active { background: #25282d; }
+.ctl:disabled { background: #222428; color: #5d6066; }
+.ctl.on { background: var(--accent); }
+.ctl.on:hover { background: var(--accent-hi); }
+.ctl.on:active { background: var(--accent-lo); }
 
 .card { padding: 9px; gap: 3px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); }
 .card-label { font-size: 10px; color: var(--muted); }

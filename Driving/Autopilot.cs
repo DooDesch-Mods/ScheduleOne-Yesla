@@ -68,6 +68,7 @@ namespace Yesla.Driving
             LandVehicle car = CurrentCar();
             if (car == null) { why = "not in a car"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
             if (!Phone.YeslaApp.IsYesla(car)) { why = "not a Yesla"; Core.Log.Msg("[Autopilot] engage refused: " + why + " (" + car.VehicleCode + ")"); return false; }
+            if (!Vehicle.Fleet.IsMine(car)) { why = "not your Yesla"; Core.Log.Msg("[Autopilot] engage refused: " + why + " (" + Vehicle.Fleet.Describe(car) + ")"); return false; }
             if (!car.LocalPlayerIsDriver) { why = "not in the driver seat"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
             if (Destination == null) { why = "no destination"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
             if (car.Agent == null) { why = "this car has no road AI"; Core.Log.Warning("[Autopilot] engage refused: " + why); return false; }
@@ -83,6 +84,7 @@ namespace Yesla.Driving
 
             // State first: a route that cannot be found reports Failed synchronously from inside Navigate.
             _car = car;
+            PathFollower.Attach(car, "Assisted Driving", Disengage);
             SetState(DriveState.Driving, "engaged towards " + DestinationLabel);
             Navigate(car);
             why = State == DriveState.Driving ? string.Empty : LastReason;
@@ -126,7 +128,7 @@ namespace Yesla.Driving
         {
             LandVehicle car = _car;
             _car = null;
-            PathFollower.Reset();
+            PathFollower.Detach(car);
             if (car == null) { Core.Log.Warning("[Autopilot] release with no car - nothing to stop"); return; }
             try
             {
@@ -198,7 +200,6 @@ namespace Yesla.Driving
             DestinationLabel = string.Empty;
             LastReason = string.Empty;
             _car = null;
-            PathFollower.Reset();
         }
     }
 }
