@@ -5,7 +5,7 @@ using Il2CppScheduleOne.Vehicles;
 namespace Yesla.Vehicle
 {
     /// <summary>
-    /// The pedestrian warning sound an electric car plays outside because its motor is near silent: clearly audible
+    /// The pedestrian warning sound an electric car plays outside because its motor is near silent: audible
     /// while reversing, a quiet hum while rolling forward below 32 km/h, nothing above that or at a standstill.
     ///
     /// Every player runs it for every Yesla. <c>LandVehicle.Speed_Kmh</c> is worked out on each peer from the car's
@@ -17,7 +17,7 @@ namespace Yesla.Vehicle
         private const float ForwardLimit = 32f;
         /// <summary>The hum fades out over this many km/h below <see cref="ForwardLimit"/>.</summary>
         private const float FadeBand = 4f;
-        private const float ReverseVolume = 0.9f, ForwardVolume = 0.3f, CabinFactor = 0.12f;
+        private const float ReverseVolume = 0.3f, ForwardVolume = 0.08f, CabinFactor = 0.05f;
         private const float Rescan = 1f;
 
         private sealed class Entry
@@ -87,7 +87,7 @@ namespace Yesla.Vehicle
                 AudioClip clip = Clips.Get("pws");
                 if (clip == null) { _noClip = true; Core.Log.Error("[Sound] no pedestrian warning sound - Yeslas stay silent outside."); return; }
                 Known.Add(car.Pointer);
-                AudioSource s = Clips.On(car, "YeslaPws", new Vector3(0f, 0.5f, 0f), 3f, 35f);
+                AudioSource s = Clips.On(car, "YeslaPws", new Vector3(0f, 0.5f, 0f), 3f, 20f);
                 s.clip = clip;
                 s.loop = true;
                 s.volume = 0f;
