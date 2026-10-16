@@ -79,6 +79,7 @@ namespace Yesla
             Vehicle.Plate.Reset();
             DestinationMarker.Reset();
             Vehicle.Indicators.Reset();
+            Vehicle.AutoLights.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
             Visual.Viz.Reset();
@@ -100,6 +101,7 @@ namespace Yesla
             Vehicle.Sentry.Tick();
             Vehicle.Plate.Tick();
             Vehicle.Indicators.Tick();
+            if (Net.YeslaNet.IsHost) Vehicle.AutoLights.Tick();
             DestinationMarker.Tick();
             FirstPerson.Tick();
             Visual.Viz.Tick();

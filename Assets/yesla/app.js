@@ -214,6 +214,16 @@ function renderSpots() {
   }
 }
 
+// Where the pointer is inside the map frame. offsetX is measured in the element under the pointer, which is the
+// moved and scaled map picture or a marker more often than the frame itself; clientX is the page, the frame the
+// rect is in.
+function inView(e) {
+  var r = viewportEl.rect ? viewportEl.rect() : null;
+  if (r && typeof e.clientX === 'number') return { x: e.clientX - r.left, y: e.clientY - r.top };
+  if (e.target === viewportEl && typeof e.offsetX === 'number') return { x: e.offsetX, y: e.offsetY };
+  return null;
+}
+
 function placeAt(px, py) {
   var wx = (px - tx) / (WORLD * zoom);
   var wy = (py - ty) / (WORLD * zoom);
@@ -227,7 +237,11 @@ function placeAt(px, py) {
   return best;
 }
 
-// Full screen keeps the point in the middle of the map where it was.
+// Full screen keeps the point in the middle of the map where it was. el.rect() reports the last render, so the
+// new size is only known once the page has been laid out again; until then the centre is held and retried.
+var RECENTRE_TRIES = 12;
+var RECENTRE_MS = 30;
+
 function setFull(on) {
   if (full === on) return;
   var v = view();
@@ -236,8 +250,13 @@ function setFull(on) {
   full = on;
   setClass(appEl, full ? 'app full' : 'app');
   $('full-i').setAttribute('src', full ? 'i-shrink.png' : 'i-expand.png');
-  centreOn(cx, cy);
-  later(function () { centreOn(cx, cy); }, 0);
+  var tries = 0;
+  (function recentre() {
+    var now = view();
+    if ((now.w === v.w && now.h === v.h) && ++tries < RECENTRE_TRIES) { later(recentre, RECENTRE_MS); return; }
+    if (tries >= RECENTRE_TRIES) console.warn('[map] the map kept its old size after the full-screen switch - centred on it anyway');
+    centreOn(cx, cy);
+  })();
 }
 
 // ---- search ----------------------------------------------------------------------------------------------------
@@ -617,10 +636,11 @@ $('plate-reset').addEventListener('click', resetPlate);
 viewportEl.addEventListener('click', function (e) {
   if (skipTap) { skipTap = false; return; }
   if (searching || query) { closeSearch(); return; }
-  if (typeof e.offsetX !== 'number') return;
-  var hit = placeAt(e.offsetX, e.offsetY);
+  var p = inView(e);
+  if (!p) { console.warn('[map] click without a position - no pin set'); return; }
+  var hit = placeAt(p.x, p.y);
   if (hit) { selectPlace(hit); return; }
-  selectPoint((e.offsetX - tx) / (WORLD * zoom), (e.offsetY - ty) / (WORLD * zoom));
+  selectPoint((p.x - tx) / (WORLD * zoom), (p.y - ty) / (WORLD * zoom));
 });
 
 viewportEl.addEventListener('drag', function (e) {
@@ -632,8 +652,9 @@ viewportEl.addEventListener('drag', function (e) {
 
 viewportEl.addEventListener('wheel', function (e) {
   var v = view();
-  var px = typeof e.offsetX === 'number' ? e.offsetX : v.w / 2;
-  var py = typeof e.offsetY === 'number' ? e.offsetY : v.h / 2;
+  var p = inView(e);
+  var px = p ? p.x : v.w / 2;
+  var py = p ? p.y : v.h / 2;
   zoomAt(zoom + (e.wheelDelta > 0 ? -WHEEL_STEP : WHEEL_STEP), px, py);
 });
 

@@ -91,8 +91,13 @@ body {
 
 .viewport { flex: 1; min-height: 0; overflow: hidden; border-radius: 12px; background: #1b1d21; touch-action: none; }
 
-/* Full screen: the map leaves its pane and covers the whole app. */
-.app.full .viewport { position: fixed; left: 0; top: 0; right: 0; bottom: 0; border-radius: 0; }
+/* Full screen: everything around the map goes, and the map fills the app in place. Not position: fixed - a
+   top-layer box is drawn apart from the page on every rebuild, and el.rect() reports it where it would have been
+   in the flow, which put a tapped pin off by the width of the car column. */
+.app.full .car, .app.full .tabs, .app.full .segs { display: none; }
+.app.full .side { padding: 0; gap: 0; }
+.app.full .pane { gap: 0; }
+.app.full .viewport { border-radius: 0; }
 
 /* 2048 map units at 1250.8 css px for zoom 1; every size is stated because the renderer cannot read a
    picture's own size. */
@@ -135,7 +140,8 @@ body {
   background: #15161af0; box-shadow: 0 2px 8px #00000099;
 }
 .ico-s { width: 14px; height: 14px; flex: none; }
-.search { flex: 1; min-width: 0; height: 28px; font-size: 12px; color: var(--text); background: transparent; border: 0; padding: 0; }
+/* The renderer puts an input's text at the top of its box, so the padding centres the line in the 28 px. */
+.search { flex: 1; min-width: 0; height: 28px; font-size: 12px; color: var(--text); background: transparent; border: 0; padding: 6px 0 0; }
 .results {
   max-height: 210px; overflow-y: auto; min-height: 0; padding: 4px; gap: 1px; border-radius: 10px;
   background: #15161af5; box-shadow: 0 3px 12px #000000aa;
@@ -232,7 +238,7 @@ body {
 }
 .plateedit { flex-direction: row; align-items: center; gap: 8px; }
 .pfield {
-  flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--raised);
+  flex: 1; min-width: 0; height: 32px; padding: 7px 10px 0; border-radius: 8px; background: var(--raised);
   border: 0; color: var(--text); font-size: 14px; letter-spacing: 2px;
 }
 .pfield:focus { background: var(--raised-hi); }
