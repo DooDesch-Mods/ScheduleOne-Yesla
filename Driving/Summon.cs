@@ -56,6 +56,8 @@ namespace Yesla.Driving
             internal ParkTarget Park;
             /// <summary>The parking manoeuvre has the car; the road AI's callbacks no longer count.</summary>
             internal bool Manoeuvre;
+            /// <summary>When the road AI's way to <see cref="Park"/> is next checked for a direct way in.</summary>
+            internal float NextReach;
             /// <summary>Go to target: the car drives to <see cref="Target"/> and parks there instead of meeting the player.</summary>
             internal bool GoTo;
             internal string Label = string.Empty;
@@ -292,6 +294,14 @@ namespace Yesla.Driving
             park.Park = spot;
             park.Manoeuvre = false;
             LandVehicle car = park.Car;
+            // The road AI snaps to its nearest road node, which may lie behind the car: for a spot a few metres away it
+            // drove off, turned and came back. The manoeuvre takes the car straight there when its aisle is clear.
+            if (!spot.Kerb && Parking.InReach(car, spot, out string reach))
+            {
+                Core.Log.Msg("[Summon] #" + park.CarId + ": " + spot.Label + " is in reach, " + reach + " - parking without the road AI.");
+                Manoeuvre(park, spot);
+                return;
+            }
             PathFollower.Detach(car);
             PathFollower.Attach(car, "Summon", park.Profile, reason =>
             {
@@ -460,6 +470,15 @@ namespace Yesla.Driving
                 // that was just occupied stays simulated, so the errand keeps it that way.
                 if (job.Car.Rb != null && job.Car.Rb.isKinematic && !job.WokeUp) { Core.Log.Msg("[Summon] #" + job.CarId + " is kinematic away from every player - keeping it physical for the errand."); job.WokeUp = true; }
                 job.Car.timeOnLastOccupied = Time.timeSinceLevelLoad;
+                if (job.Parking && !job.Fallback && job.Park != null && !job.Park.Kerb && !job.Manoeuvre && Time.time >= job.NextReach)
+                {
+                    job.NextReach = Time.time + 0.25f;
+                    if (Parking.InReach(job.Car, job.Park, out string reach))
+                    {
+                        Core.Log.Msg("[Summon] #" + job.CarId + ": in reach of " + job.Park.Label + ", " + reach + " - the parking manoeuvre takes over from the road AI.");
+                        Manoeuvre(job, job.Park);
+                    }
+                }
             }
         }
 

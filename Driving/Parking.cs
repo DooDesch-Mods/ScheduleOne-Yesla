@@ -118,6 +118,14 @@ namespace Yesla.Driving
         /// </summary>
         private const float StageBackOff = 2f;
         private const int StageBackOffs = 3;
+        /// <summary>
+        /// Past the stop point turned further than planned, no backing arc fits: the car drives on forward up to this
+        /// far, which carries it away from the spot's axis until one arc reaches it, instead of backing in crooked and
+        /// pulling out for a second try.
+        /// </summary>
+        private const float StageDriveOn = 3.5f;
+        /// <summary>Handed over from the road, the car stands at least this far before the stop point, driving towards it.</summary>
+        private const float StageBefore = 2f;
         /// <summary>Backing in from where the car stands: at most this far straight back before the arc, and no wider arc.</summary>
         private const float MaxStraightBack = 4f, MaxArc = 12f;
         /// <summary>A retry after backing in crooked lines up on the spot's axis this far out.</summary>
@@ -489,12 +497,30 @@ namespace Yesla.Driving
             // Backing in, the car drives the stage line from where it stands, not the straight run: that line has to
             // be clear too, or a hydrant beside the driveway and the kerb next to it end up under the swing.
             bool noseIn = t.Reverse && Config.Preferences.ParkDirection == "auto" && NoseInArc(car, t, Flat3(pos, t.Centre.y), car.transform.forward, null, out _);
-            if (t.Reverse && !noseIn && !PlanReverse(car, t, Flat3(pos, t.Centre.y), true, out string stage)
-                && !NoseInLane(car, t, Flat3(pos, t.Centre.y), null, out _))
+            string stage = string.Empty;
+            bool staged = t.Reverse && !noseIn && PlanReverse(car, t, Flat3(pos, t.Centre.y), true, out stage);
+            if (t.Reverse && !noseIn && !staged && !NoseInLane(car, t, Flat3(pos, t.Centre.y), null, out _))
             {
                 if (stage != _reachBlock) Core.Log.Msg("[Park] " + t.Label + " is " + Flat(t.Centre - pos).magnitude.ToString("F0") + " m away, the line to back in from here is blocked by " + stage + " - the road AI drives on.");
                 _reachBlock = stage;
                 return false;
+            }
+            if (staged)
+            {
+                // The stage line starts behind a car that already stands past its stop point, or one that drives the
+                // other way along the aisle: the manoeuvre would back in from the wrong place. One arc from where it
+                // stands still works; otherwise the road AI brings it round.
+                Vector3 f = Flat(car.transform.forward).normalized;
+                float beyond = Vector3.Dot(Flat(pos - _stage), _stageFacing);
+                bool before = beyond < -StageBefore && Vector3.Dot(f, _stageFacing) > 0.3f;
+                float turned = Vector3.SignedAngle(t.Heading, f, Vector3.up);
+                if (!before && (Mathf.Abs(turned) > NoseInFrom || !ArcFits(t, Flat3(pos, t.Centre.y), f, out string arc)))
+                {
+                    string pose = "past its stop point or the wrong way round";
+                    if (pose != _reachBlock) Core.Log.Msg("[Park] " + t.Label + " is " + Flat(t.Centre - pos).magnitude.ToString("F0") + " m away, the car stands " + pose + " (" + beyond.ToString("F1") + " m, turned " + turned.ToString("F0") + " deg) - the road AI drives on.");
+                    _reachBlock = pose;
+                    return false;
+                }
             }
             _reachBlock = string.Empty;
             why = Flat(t.Centre - pos).magnitude.ToString("F0") + " m from it, a clear run of " + d.ToString("F0") + " m into its aisle";
@@ -531,6 +557,9 @@ namespace Yesla.Driving
         /// <summary>Metres to the left (negative: right) of the stage path the car aims, away from a post.</summary>
         private static float _nudge;
         private static bool _stageBacking;
+        private static bool _drivingOn;
+        private static Vector3 _driveOnFrom;
+        private static readonly List<Vector3> Probe = new List<Vector3>();
         private static int _stageBackOffs;
         private static string _blockedBy = string.Empty;
 
@@ -607,6 +636,7 @@ namespace Yesla.Driving
             _waited = 0f;
             _stageBackOffs = 0;
             _stageBacking = false;
+            _drivingOn = false;
             _sameHits = 0;
             _lastHit = string.Empty;
             _steer = 0f;
@@ -961,7 +991,7 @@ namespace Yesla.Driving
                 return;
             }
             Path.Clear();
-            if (!ArcFrom(pos, _car.transform.forward, out string how))
+            if (!ArcFrom(_target, pos, _car.transform.forward, out string how))
             {
                 Path.AddRange(ReversePath);
                 how = how + ", following the arc planned from the stop point";
@@ -977,9 +1007,9 @@ namespace Yesla.Driving
         /// offset from it, which fixes the radius. Backing with the centre on side s turns the car by -s, so the sign
         /// of theta must agree. The first d that gives a radius between full lock and <see cref="MaxArc"/> wins.
         /// </summary>
-        private static bool ArcFrom(Vector3 pos, Vector3 forward, out string how)
+        private static bool ArcFrom(ParkTarget t, Vector3 pos, Vector3 forward, out string how)
         {
-            Vector3 h = _target.Heading;
+            Vector3 h = t.Heading;
             Vector3 hr = Vector3.Cross(Vector3.up, h);
             Vector3 u = Flat(forward);
             if (u.sqrMagnitude < 1e-4f) { how = "no heading to plan from"; return false; }
@@ -988,12 +1018,12 @@ namespace Yesla.Driving
             if (Mathf.Abs(theta) < 10f) { how = "already facing out of the spot"; return false; }
             float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
             float bend = 1f - Mathf.Cos(theta * Mathf.Deg2Rad);
-            float y = _target.Centre.y;
+            float y = t.Centre.y;
             string first = null;
             for (float d = 0f; d <= MaxStraightBack; d += 0.25f)
             {
                 Vector3 p = Flat3(pos - u * (Wheelbase * 0.5f + d), y);
-                float lat = Vector3.Dot(p - _target.Centre, hr);
+                float lat = Vector3.Dot(p - t.Centre, hr);
                 float side = lat >= 0f ? 1f : -1f;
                 if (Mathf.Sign(theta) != -side) { first ??= "the car is turned the wrong way for one arc"; continue; }
                 float r = Mathf.Abs(lat) / bend;
@@ -1001,7 +1031,7 @@ namespace Yesla.Driving
                 if (r > MaxArc) { first ??= "arc wider than " + MaxArc + " m"; continue; }
                 Vector3 c = p + Vector3.Cross(Vector3.up, u) * (side * r);
                 Vector3 e = c - hr * (side * r);
-                if (Vector3.Dot(e - _target.Centre, h) < -Wheelbase * 0.5f + StraightIn * 0.5f) { first ??= "the arc would end inside the spot"; continue; }
+                if (Vector3.Dot(e - t.Centre, h) < -Wheelbase * 0.5f + StraightIn * 0.5f) { first ??= "the arc would end inside the spot"; continue; }
 
                 Path.Add(Flat3(pos, y));
                 if (d > 0.1f) Path.Add(Flat3(pos - u * d, y));
@@ -1012,12 +1042,26 @@ namespace Yesla.Driving
                     Vector3 rear = c - Vector3.Cross(Vector3.up, facing) * (side * r);
                     Path.Add(Flat3(rear + facing * (Wheelbase * 0.5f), y));
                 }
-                Path.Add(_target.Centre);
+                Path.Add(t.Centre);
                 how = "one arc from here: " + d.ToString("F2") + " m straight back, radius " + r.ToString("F1") + " m, " + Mathf.Abs(theta).ToString("F0") + " deg";
                 return true;
             }
             how = first ?? "no straight-back distance gives a fitting arc";
             return false;
+        }
+
+        /// <summary>Whether <see cref="ArcFrom"/> finds one arc from this pose, leaving the path the car follows as it is.</summary>
+        private static bool ArcFits(ParkTarget t, Vector3 pos, Vector3 forward, out string how)
+        {
+            Probe.Clear();
+            Probe.AddRange(Path);
+            int seg = _seg;
+            Path.Clear();
+            bool ok = ArcFrom(t, pos, forward, out how);
+            Path.Clear();
+            Path.AddRange(Probe);
+            _seg = seg;
+            return ok;
         }
 
         /// <summary>Stops the manoeuvre without reporting back; the caller hands the controls back.</summary>
@@ -1128,6 +1172,30 @@ namespace Yesla.Driving
                     {
                         Retarget(car, "the way to the stop point " + Flat(_stage - pos).magnitude.ToString("F1") + " m");
                         break;
+                    }
+                    if (_drivingOn || ((past || overshot || left < 1f) && _phaseTime <= _stageBudget))
+                    {
+                        float on = _drivingOn ? Flat(pos - _driveOnFrom).magnitude : 0f;
+                        bool fits = ArcFits(_target, pos, fwd, out string tight);
+                        bool aheadClear = !Blocked(car, fwd, Mathf.Max(0f, v), out string stopper, out _, out _);
+                        if (!fits && tight.StartsWith("arc tighter") && on < StageDriveOn && aheadClear)
+                        {
+                            if (!_drivingOn)
+                            {
+                                _drivingOn = true;
+                                _driveOnFrom = pos;
+                                Core.Log.Msg("[Park] Stage: at the stop point, " + Pose() + ", " + tight + " - driving on up to " + StageDriveOn.ToString("F1") + " m until one arc fits.");
+                            }
+                            Drive(car, v, CreepKmh, dt);
+                            Steer(car, Pursuit(pos, fwd, 1f), dt);
+                            break;
+                        }
+                        if (_drivingOn)
+                        {
+                            _drivingOn = false;
+                            StartIn(pos, (fits ? "drove on " : "drove on, gave up after ") + on.ToString("F1") + " m" + (aheadClear ? "" : ", " + stopper + " ahead"));
+                            break;
+                        }
                     }
                     if (past || overshot || left < 1f || _phaseTime > _stageBudget)
                     {
@@ -1245,7 +1313,7 @@ namespace Yesla.Driving
                     {
                         Path.Clear();
                         string how = "";
-                        if (!_target.Reverse || !ArcFrom(pos, fwd, out how))
+                        if (!_target.Reverse || !ArcFrom(_target, pos, fwd, out how))
                         {
                             if (_target.Reverse) how = "; " + how + ", lining up on the axis";
                             Path.Add(_target.Centre - into * (_target.Reverse ? ReverseLineUp : AxisRoom(car, _target, FarOut)));
