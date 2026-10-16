@@ -135,9 +135,29 @@
       <HintPath>$(GameManagedPath)/Il2CppAstarPathfindingProject.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- The compass icon for the destination. -->
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GameManagedPath)/UnityEngine.UI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The synthesised electric drive sound. -->
+    <Reference Include="UnityEngine.AudioModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.AudioModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- PNG in and out: the map picture for the phone app and the compass icon. -->
+    <Reference Include="UnityEngine.ImageConversionModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.ImageConversionModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- Raw key state for the player's in-car keys; the game's input map has no free action for them. -->
     <Reference Include="UnityEngine.InputLegacyModule">
       <HintPath>$(GameManagedPath)/UnityEngine.InputLegacyModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The key hint: the game's hint strip draws input actions only. -->
+    <Reference Include="Unity.InputSystem">
+      <HintPath>$(GameManagedPath)/Unity.InputSystem.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -147,6 +167,26 @@
       <HintPath>$(MelonLoaderPath)/Newtonsoft.Json.dll</HintPath>
       <Private>false</Private>
     </Reference>
+  </ItemGroup>
+
+  <!-- Sideload is never referenced: the phone app talks to it through the single-file shim, which finds the host by
+       reflection and turns every call into a no-op when Sideload is not installed. -->
+  <PropertyGroup>
+    <SideloadShimPath Condition="Exists('$(MSBuildThisFileDirectory)../Sideload/Sideload.Api/Sideload.cs')">$(MSBuildThisFileDirectory)../Sideload/Sideload.Api/Sideload.cs</SideloadShimPath>
+    <SideloadShimPath Condition="'$(SideloadShimPath)' == '' And Exists('$(WorkspaceLibPath)/sideload-api/Sideload.cs')">$(WorkspaceLibPath)/sideload-api/Sideload.cs</SideloadShimPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Condition="'$(SideloadShimPath)' != ''" Include="$(SideloadShimPath)" Link="Sideload.Api.cs" />
+  </ItemGroup>
+
+  <!-- The phone app. The LogicalName prefix is the bundle prefix Phone/YeslaApp.cs registers. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/yesla/*">
+      <LogicalName>Yesla.Assets.yesla.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Assets/compass.png">
+      <LogicalName>Yesla.Assets.compass.png</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- The car model, embedded so the mod stays a single file. Read by Vehicle/YeslaModel.cs. -->

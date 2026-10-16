@@ -2,6 +2,7 @@ using System;
 using HarmonyLib;
 using Il2CppFishNet;
 using Il2CppScheduleOne.Vehicles;
+using Il2CppScheduleOne.Vehicles.Modification;
 using FishNetObject = Il2CppFishNet.Object.NetworkObject;
 
 namespace Yesla.Vehicle
@@ -87,6 +88,14 @@ namespace Yesla.Vehicle
                 if (!YeslaBody.Apply(clone)) Core.Log.Error("[VehicleType] the Yesla body could not be built - the car keeps the donor look.");
             }
             catch (Exception e) { Core.Log.Error("[VehicleType] the Yesla body failed, the car keeps the donor look: " + e); }
+
+            // A new car takes its colour from here (LandVehicle.Awake: OwnedColor = Color.DefaultColor); a saved car
+            // keeps the colour its save names.
+            if (lv.Color != null) lv.Color.DefaultColor = EVehicleColor.White;
+            else Core.Log.Error("[VehicleType] the clone has no VehicleColor - a new Yesla keeps the donor's colour.");
+
+            try { YeslaSound.Apply(clone); }
+            catch (Exception e) { Core.Log.Error("[VehicleType] the electric drive sound failed, the car keeps the donor engine: " + e); }
 
             _prefab = clone;
             Core.Log.Msg("[VehicleType] built the '" + Code + "' prefab from '" + DonorCode + "'.");

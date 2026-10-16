@@ -34,9 +34,9 @@
     0.26196240682412625
   ],
   "lcdCenter": [
-    -0.00023640771652485592,
-    0.8112791768963026,
-    0.5062594456747
+    -0.00023640376346061956,
+    0.8112794745387862,
+    0.5062596242601903
   ],
   "lcdNormal": [
     -1.3036369637120515e-05,
@@ -56,8 +56,8 @@
     ]
   },
   "triangles": {
-    "Body_LOD0": 58996,
-    "Body_LOD1": 15752,
+    "Body_LOD0": 58000,
+    "Body_LOD1": 15257,
     "Body_LOD2": 3874,
     "Wheel": 3780,
     "Wheel_LOD1": 1294
@@ -75,10 +75,12 @@
     "Light_IndicatorL",
     "Light_IndicatorR",
     "Interior_Light",
-    "Reflector_Red",
+    "Reflector_Red.light_pantulan",
     "Light_Reverse",
+    "Reflector_Red",
     "Licence_Plate",
     "Underbody",
+    "Light_Cover",
     "LCD",
     "Tyre_Rubber",
     "Rim_Alloy",

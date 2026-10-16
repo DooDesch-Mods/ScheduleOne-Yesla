@@ -65,13 +65,12 @@ namespace Yesla.Vehicle
                 {
                     MeshRenderer r = AddPart(lodRoot.transform, part, layer);
                     lods[i].Add(r);
-                    switch (part.MaterialName)
-                    {
-                        case "Paint": paint.Add(r); break;
-                        case "Light_Head": head.Add(r); break;
-                        case "Light_Brake": brake.Add(r); break;
-                        case "Light_Reverse": reverse.Add(r); break;
-                    }
+                    // Lamp materials are named after their class ("Light_Brake" or "Light_Brake.left_rear_light"), so the
+                    // groups are found by prefix. Light_Cover, the smoked lens over the tail lamps, is in no group.
+                    if (GlbModel.InGroup(part.MaterialName, "Paint")) paint.Add(r);
+                    else if (GlbModel.InGroup(part.MaterialName, "Light_Head")) head.Add(r);
+                    else if (GlbModel.InGroup(part.MaterialName, "Light_Brake")) brake.Add(r);
+                    else if (GlbModel.InGroup(part.MaterialName, "Light_Reverse")) reverse.Add(r);
                 }
             }
 
@@ -86,7 +85,7 @@ namespace Yesla.Vehicle
             lodGroup.RecalculateBounds();
 
             BindColour(lv, paint);
-            BindLights(car, model, head, brake, reverse);
+            BindLights(car, head, brake, reverse);
             int wheels = FitWheels(lv, model, layout, layer);
             FitBounds(lv, layout, modelOffsetY);
             HideExhaust(lodGroup.transform);
@@ -122,23 +121,54 @@ namespace Yesla.Vehicle
             lv.Color.BodyMeshes = meshes;
         }
 
-        private static void BindLights(GameObject car, GlbModel model, List<MeshRenderer> head, List<MeshRenderer> brake, List<MeshRenderer> reverse)
+        private static void BindLights(GameObject car, List<MeshRenderer> head, List<MeshRenderer> brake, List<MeshRenderer> reverse)
         {
             VehicleLights lights = car.GetComponent<VehicleLights>();
             if (lights == null) { Core.Log.Warning("[Body] no VehicleLights on the donor - the Yesla lamps stay dark."); return; }
 
+            // Every lamp renderer already carries its textured material; the group's off material is that one, the on
+            // material is the same material with its texture glowing in the lamp colour.
             lights.headLightMeshes = ToMeshArray(head);
-            lights.headLightMat_Off = model.Materials["Light_Head"];
-            lights.headlightMat_On = GlbModel.Emissive(model.Materials["Light_Head"], HeadOn, "Yesla_Light_Head_On");
+            Material headOff = GroupMaterial("Light_Head", head);
+            if (headOff != null)
+            {
+                lights.headLightMat_Off = headOff;
+                lights.headlightMat_On = GlbModel.Emissive(headOff, HeadOn, "Yesla_Light_Head_On");
+            }
 
             lights.brakeLightMeshes = ToMeshArray(brake);
-            lights.brakeLightMat_Off = model.Materials["Light_Brake"];
-            lights.brakeLightMat_On = GlbModel.Emissive(model.Materials["Light_Brake"], BrakeOn, "Yesla_Light_Brake_On");
+            Material brakeOff = GroupMaterial("Light_Brake", brake);
+            if (brakeOff != null)
+            {
+                lights.brakeLightMat_Off = brakeOff;
+                lights.brakeLightMat_On = GlbModel.Emissive(brakeOff, BrakeOn, "Yesla_Light_Brake_On");
+            }
 
             lights.hasReverseLights = reverse.Count > 0;
             lights.reverseLightMeshes = ToMeshArray(reverse);
-            lights.reverseLightMat_Off = model.Materials["Light_Reverse"];
-            lights.reverseLightMat_On = GlbModel.Emissive(model.Materials["Light_Reverse"], ReverseOn, "Yesla_Light_Reverse_On");
+            Material reverseOff = GroupMaterial("Light_Reverse", reverse);
+            if (reverseOff != null)
+            {
+                lights.reverseLightMat_Off = reverseOff;
+                lights.reverseLightMat_On = GlbModel.Emissive(reverseOff, ReverseOn, "Yesla_Light_Reverse_On");
+            }
+        }
+
+        /// <summary>
+        /// The material a lamp group switches back to when it is off. VehicleLights swaps a whole group to one material,
+        /// so a group whose renderers use different materials would lose that difference on the first switch; it is
+        /// logged and the first renderer's material is taken.
+        /// </summary>
+        private static Material GroupMaterial(string group, List<MeshRenderer> renderers)
+        {
+            if (renderers.Count == 0) { Core.Log.Warning("[Body] the model has no " + group + " renderers - that lamp group stays as the donor had it."); return null; }
+            Material first = renderers[0].sharedMaterial;
+            if (first == null) { Core.Log.Error("[Body] the first " + group + " renderer has no material - that lamp group keeps the donor's materials."); return null; }
+            var names = new HashSet<string>();
+            foreach (MeshRenderer r in renderers) names.Add(r.sharedMaterial != null ? r.sharedMaterial.name : "(none)");
+            if (names.Count > 1)
+                Core.Log.Warning("[Body] the " + group + " renderers use " + names.Count + " different materials (" + string.Join(", ", names) + "); VehicleLights swaps the group to one material, so every lamp takes " + first.name + " once it switches.");
+            return first;
         }
 
         private static int FitWheels(LandVehicle lv, GlbModel model, YeslaLayout layout, int layer)
