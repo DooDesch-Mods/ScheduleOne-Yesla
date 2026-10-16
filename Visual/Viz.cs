@@ -23,6 +23,9 @@ namespace Yesla.Visual
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Viz.Tick");
+#endif
             LandVehicle car = Autopilot.CurrentCar();
             bool inYesla = car != null && Phone.YeslaApp.IsYesla(car);
             if (!inYesla)
@@ -41,6 +44,9 @@ namespace Yesla.Visual
         /// <summary>After the car has moved this frame: render and place the picture.</summary>
         internal static void LateTick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Viz.LateTick");
+#endif
             if (_car == null || _failed) return;
             try
             {

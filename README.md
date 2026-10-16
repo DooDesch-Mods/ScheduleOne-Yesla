@@ -69,6 +69,7 @@ Built by DooDesch on [S1API](https://github.com/ifBars/S1API) by ifBars.
 Car model "Tesla 2018 Model 3" by Ameer Studio, licensed
 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/), modified for this mod (see
 [LICENSE-MODEL.txt](LICENSE-MODEL.txt)).
+App icons from [Lucide](https://lucide.dev), licensed [ISC](https://lucide.dev/license).
 
 "Tesla" and "Model 3" are trademarks of Tesla, Inc. This mod is not affiliated with or endorsed by Tesla, Inc.
 

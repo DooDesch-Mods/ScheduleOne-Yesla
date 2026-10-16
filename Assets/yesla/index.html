@@ -1,55 +1,105 @@
 <link rel="stylesheet" href="app.css">
 
-<div class="app">
+<div class="app" id="app">
 
-  <!-- The map: a picture bigger than its window, moved under it with one transform. -->
-  <div class="viewport" id="viewport">
-    <div class="world" id="world">
-      <img class="map" id="map-img" src="s1://yesla-map" alt="">
-      <div class="nomap" id="nomap"></div>
-      <div class="layer" id="places"></div>
-      <div class="layer" id="marks">
-        <div class="dest" id="m-dest"><div class="core"></div></div>
-        <div class="pending" id="m-pending"></div>
-        <div class="car" id="m-car"><div class="nose"></div></div>
-        <div class="me" id="m-me"><div class="dot"></div></div>
-      </div>
+  <!-- The car: picture in its own paint, state, and the remote controls. -->
+  <div class="car">
+    <div class="name" id="car-name">Yesla</div>
+    <div class="statusrow"><div class="sdot" id="car-dot"></div><div class="status" id="car-line">No Yesla nearby</div></div>
+    <div class="stage">
+      <img class="pic hidden" id="car-pic" alt="">
     </div>
-    <div class="tag" id="tag"></div>
-    <button class="locate" id="locate">Car</button>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-top">-</div><div class="k">km/h top</div></div>
+      <div class="stat"><div class="v" id="s-profile">-</div><div class="k">profile</div></div>
+      <div class="stat"><div class="v" id="s-plate">-</div><div class="k">plate</div></div>
+    </div>
+    <div class="ctrls">
+      <div class="ctl"><button class="tile" id="c-summon"><img class="ico" id="c-summon-i" src="i-summon.png" alt=""></button><div class="tl" id="c-summon-t">Summon</div></div>
+      <div class="ctl"><button class="tile" id="c-honk"><img class="ico" src="i-honk.png" alt=""></button><div class="tl" id="c-honk-t">Honk</div></div>
+      <div class="ctl"><button class="tile" id="c-lock"><img class="ico" id="c-lock-i" src="i-unlock.png" alt=""></button><div class="tl" id="c-lock-t">Unlocked</div></div>
+      <div class="ctl"><button class="tile" id="c-sentry"><img class="ico" src="i-sentry.png" alt=""></button><div class="tl" id="c-sentry-t">Sentry</div></div>
+    </div>
   </div>
 
   <div class="side">
-    <div class="head">
-      <div class="title" id="car-name">Yesla</div>
-      <div class="sub" id="car-line">No Yesla nearby</div>
+    <div class="tabs">
+      <button class="tab on" id="t-drive"><div class="tt">Drive</div><div class="bar"></div></button>
+      <button class="tab" id="t-paint"><div class="tt">Paint</div><div class="bar"></div></button>
+      <button class="tab" id="t-plate"><div class="tt">Plate</div><div class="bar"></div></button>
     </div>
 
-    <div class="controls" id="controls">
-      <button class="ctl" id="c-summon">Summon</button>
-      <button class="ctl" id="c-honk">Honk</button>
-      <button class="ctl" id="c-lock">Lock</button>
-      <button class="ctl" id="c-sentry">Sentry</button>
-    </div>
+    <!-- Drive: the map, search, the destination card and the drive profile. -->
+    <div class="pane" id="p-drive">
+      <div class="viewport" id="viewport">
+        <div class="world" id="world">
+          <img class="map" id="map-img" src="s1://yesla-map" alt="">
+          <div class="nomap" id="nomap"></div>
+          <div class="layer" id="places"></div>
+          <div class="layer" id="marks">
+            <div class="dest" id="m-dest"><div class="core"></div></div>
+            <div class="pending" id="m-pending"><div class="core"></div></div>
+            <div class="mcar" id="m-car"><div class="nose"></div></div>
+            <div class="me" id="m-me"><div class="ring"><div class="dot"></div></div></div>
+          </div>
+        </div>
 
-    <div class="profiles" id="profiles">
-      <button class="prof" id="p-chill">Chill</button>
-      <button class="prof" id="p-standard">Standard</button>
-      <button class="prof" id="p-madmax">Mad Max</button>
-    </div>
+        <div class="find" id="find">
+          <div class="field">
+            <img class="ico-s" src="i-search.png" alt="">
+            <input class="search" id="search" placeholder="Search places" maxlength="40">
+          </div>
+          <div class="results hidden" id="results"></div>
+        </div>
+        <div class="mapbtns">
+          <button class="mbtn" id="locate"><img class="ico-s" src="i-locate.png" alt=""></button>
+          <button class="mbtn" id="full"><img class="ico-s" id="full-i" src="i-expand.png" alt=""></button>
+        </div>
 
-    <div class="card" id="card">
-      <div class="card-label" id="card-label">Destination</div>
-      <div class="card-name" id="card-name">Choose a place or tap the map</div>
-      <div class="card-line" id="card-line"></div>
-      <div class="actions">
-        <button class="btn primary" id="send">Send to car</button>
-        <button class="btn" id="clear">Clear</button>
+        <div class="destcard" id="card">
+          <div class="dt">
+            <div class="dn" id="card-name">Tap the map or search a place</div>
+            <div class="dl" id="card-line"></div>
+          </div>
+          <button class="btn ghost" id="clear">Clear</button>
+          <button class="btn" id="send">Send to car</button>
+        </div>
+        <div class="tag" id="tag"></div>
+      </div>
+
+      <div class="segs">
+        <div class="seg wide" id="profiles">
+          <button class="sg" id="p-chill"><div class="sl">Chill</div><div class="ss">driving</div></button>
+          <button class="sg" id="p-standard"><div class="sl">Standard</div><div class="ss">driving</div></button>
+          <button class="sg" id="p-madmax"><div class="sl">Mad Max</div><div class="ss">driving</div></button>
+        </div>
+        <div class="seg wide" id="parking">
+          <button class="sg" id="k-auto"><div class="sl">Auto</div><div class="ss">parking</div></button>
+          <button class="sg" id="k-reverse"><div class="sl">Reverse in</div><div class="ss">parking</div></button>
+          <button class="sg" id="k-forward"><div class="sl">Nose in</div><div class="ss">parking</div></button>
+        </div>
       </div>
     </div>
 
-    <input class="search" id="search" placeholder="Search places" maxlength="40">
-    <div class="list" id="list"></div>
+    <!-- Paint: the game's own paints, applied to the car at once. -->
+    <div class="pane pad hidden" id="p-paint">
+      <div class="h">Paint</div>
+      <div class="paintname" id="paint-name">-</div>
+      <div class="swatches" id="swatches"></div>
+      <div class="hint">Saved with the car and seen by everyone in co-op.</div>
+    </div>
+
+    <!-- Plate: the text on the car's licence plate. -->
+    <div class="pane pad hidden" id="p-plate">
+      <div class="h">Licence plate</div>
+      <div class="plate"><div class="plate-f"><div class="plate-t" id="plate-preview">-</div></div></div>
+      <div class="plateedit">
+        <input class="pfield" id="plate-in" maxlength="12" placeholder="New plate">
+        <button class="btn" id="plate-apply">Apply</button>
+        <button class="btn ghost" id="plate-reset">Reset</button>
+      </div>
+      <div class="hint" id="plate-hint">Up to 8 letters and digits.</div>
+    </div>
   </div>
 
 </div>

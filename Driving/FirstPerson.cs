@@ -36,6 +36,9 @@ namespace Yesla.Driving
         /// <summary>Called from OnUpdate: the view key, and dropping the view when the player is no longer in a Yesla.</summary>
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.FirstPerson.Tick");
+#endif
             LandVehicle car = Autopilot.CurrentCar();
             bool inYesla = car != null && Phone.YeslaApp.IsYesla(car);
             if (Active && !inYesla) { Set(false, car == null ? "left the car" : "not a Yesla"); return; }
@@ -67,6 +70,9 @@ namespace Yesla.Driving
 
         private static void Postfix(VehicleCamera __instance)
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.FirstPerson.Camera");
+#endif
             if (!Active) return;
             try
             {

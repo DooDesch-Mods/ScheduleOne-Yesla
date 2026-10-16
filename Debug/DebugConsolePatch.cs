@@ -79,6 +79,8 @@ namespace Yesla.Debugging
                         Say("enter              - get into the nearest owned car within 10 m");
                         Say("use                - hover and interact with the nearest owned car, like the E key");
                         Say("tp <x> <y> <z>     - move the local player (works on a client too)");
+                        Say("clean              - remove every Yesla but the one you sit in (host)");
+                        Say("feel <x> <z> <dx> <dz> - what the lane line finds for kerbs and posts at a point");
                         Say("tograph            - put the car onto the nearest road (vanilla teleporter)");
                         Say("diag               - road AI internals: target speed, throttle, sensors, path");
                         Say("path [from] [n]    - the planned path points (x,z) with sharp turns marked");
@@ -214,6 +216,22 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "feel":
+                    {
+                        // 'feel x z dx dz' reports what the lane line's kerb feeler finds at a point, facing (dx, dz).
+                        if (parts.Length < 6
+                            || !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float fx)
+                            || !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float fz)
+                            || !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float dx)
+                            || !float.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out float dz))
+                        { Say("usage: yesla feel <x> <z> <dx> <dz>"); break; }
+                        Vector3 at = new Vector3(fx, 50f, fz);
+                        if (Physics.Raycast(at, Vector3.down, out RaycastHit top, 100f, ~0, QueryTriggerInteraction.Ignore)) at.y = top.point.y + 0.3f;
+                        else { Say("feel: no ground at " + fx + "," + fz); break; }
+                        Say("feel " + at.ToString("F1") + ": " + Driving.LaneLine.Describe(at, new Vector3(dx, 0f, dz)));
+                        break;
+                    }
+
                     case "agentdebug":
                     {
                         LandVehicle car = Autopilot.CurrentCar();
@@ -345,6 +363,73 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "lots":
+                    {
+                        float radius = 120f;
+                        if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out radius);
+                        Say(Parking.DescribeLots(Player.Local.transform.position, radius));
+                        break;
+                    }
+
+                    case "park":
+                    {
+                        // 'park' parks the car the player sits in at the nearest free lot spot, 'park kerb' at the kerb,
+                        // 'park state' reports the manoeuvre.
+                        string arg = parts.Length > 2 ? parts[2].ToLowerInvariant() : "";
+                        if (arg == "state") { Say(Parking.Describe()); break; }
+                        LandVehicle car = Autopilot.CurrentCar();
+                        if (car == null) { Say("park: not in a car"); break; }
+                        string none = "kerb";
+                        ParkTarget target = arg == "kerb" ? Parking.Kerb(car) : Parking.Find(car, car.transform.position, out none);
+                        if (target == null) { Say("park: " + none); break; }
+                        Parking.Forget();
+                        Parking.Start(car, target, (ok, why) =>
+                        {
+                            ParkTarget next = Parking.TakeNext();
+                            if (next != null) Say("park: the next spot is " + next.Label + "; only Assisted Driving drives there");
+                            car.overrideControls = false;
+                            Core.Log.Msg("[Park] console manoeuvre " + (ok ? "done" : "failed") + ": " + why + ".");
+                        });
+                        Say("park: towards " + target.Label + " at " + target.Centre.ToString("F1"));
+                        break;
+                    }
+
+                    case "behind":
+                    {
+                        // Puts the player a few metres behind the nearest own Yesla, looking at its rear, for a
+                        // paint or plate screenshot.
+                        float metres = 4f;
+                        if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out metres);
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("behind: no own Yesla"); break; }
+                        // Behind first, then the sides and the front: the first spot with a clear line to the car wins,
+                        // so a tree or a wall behind the car does not end up in the shot.
+                        Transform ct = car.transform;
+                        Vector3[] dirs = { -ct.forward, -ct.forward - ct.right, -ct.forward + ct.right, ct.right, -ct.right, ct.forward };
+                        Vector3 look = ct.position + Vector3.up * 0.7f;
+                        Vector3 to = Vector3.zero;
+                        string side = null;
+                        for (int i = 0; i < dirs.Length && side == null; i++)
+                        {
+                            Vector3 d = dirs[i].normalized;
+                            Vector3 eye = ct.position + d * (2.4f + metres) + Vector3.up * 1.6f;
+                            Vector3 aim = ct.position + d * 2.4f + Vector3.up * 0.7f;
+                            bool clear = true;
+                            var hits = Physics.RaycastAll(eye, (aim - eye).normalized, Vector3.Distance(eye, aim), Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+                            for (int h = 0; h < hits.Length && clear; h++)
+                                if (hits[h].collider != null && !hits[h].collider.transform.IsChildOf(ct)) clear = false;
+                            if (!clear) continue;
+                            to = eye - Vector3.up * 1f;
+                            look = aim;
+                            side = i == 0 ? "behind" : i == 5 ? "in front" : "beside";
+                        }
+                        if (side == null) { Say("behind: no clear line to the car from any side"); break; }
+                        PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance.Teleport(to, false);
+                        PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerCamera>.Instance.LookAt(look, 0.1f);
+                        Say("behind: player " + side + " the car at " + to.ToString("F1") + ", looking at " + look.ToString("F1"));
+                        break;
+                    }
+
                     case "dropon":
                     {
                         // Spawns a Hounddog 4 m above the nearest own Yesla; the fall is a Sentry hit.
@@ -386,7 +471,14 @@ namespace Yesla.Debugging
                             Say(near != null ? Visual.VizScene.DescribeLights(near) : "not in a car");
                             break;
                         }
-                        else if (arg != "") { Say("usage: yesla viz [hud|full|off|lights|save [path]]"); break; }
+                        else if (arg == "hidden")
+                        {
+                            LandVehicle near = Driving.Autopilot.CurrentCar();
+                            int n = parts.Length > 3 && int.TryParse(parts[3], out int k) ? k : 8;
+                            Say(near != null ? Visual.VizBuildings.DescribeHidden(near.transform.position, n) : "not in a car");
+                            break;
+                        }
+                        else if (arg != "") { Say("usage: yesla viz [hud|full|off|lights|hidden [n]|save [path]]"); break; }
                         Say("view " + Visual.Viz.Mode + ", " + Visual.VizScene.Describe());
                         break;
                     }
@@ -492,6 +584,22 @@ namespace Yesla.Debugging
                         Say("use: prompt '" + car.intObj.message + "' state=" + car.intObj.interactionState);
                         car.Interacted();
                         Say("use: interacted with " + car.VehicleName + " - 'yesla probe' shows the seat");
+                        break;
+                    }
+
+                    case "clean":
+                    {
+                        // Removes every Yesla except the one the player sits in: test runs leave spawned cars parked
+                        // along the route, and the next run has to drive around them.
+                        if (!InstanceFinder.IsServer) { Say("clean: host only"); break; }
+                        LandVehicle keep = Player.Local?.CurrentVehicle?.GetComponent<LandVehicle>();
+                        var all = NetworkSingleton<VehicleManager>.Instance?.AllVehicles;
+                        if (all == null) { Say("clean: no vehicle manager"); break; }
+                        var doomed = new List<LandVehicle>();
+                        foreach (LandVehicle v in all)
+                            if (v != null && v != keep && v.VehicleCode == Vehicle.YeslaVehicleType.Code) doomed.Add(v);
+                        foreach (LandVehicle v in doomed) v.DestroyVehicle();
+                        Say("clean: removed " + doomed.Count + " Yesla(s)" + (keep != null ? ", kept the one you sit in" : ""));
                         break;
                     }
 

@@ -4,6 +4,8 @@ using System.Diagnostics;
 using Il2CppScheduleOne.Map.Infrastructure;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Vehicles;
+using Il2CppTMPro;
+using Yesla.Driving;
 using UnityEngine.Rendering.Universal;
 
 namespace Yesla.Visual
@@ -30,9 +32,17 @@ namespace Yesla.Visual
         private const float LightCone = 0.75f;   // cosine: about 40 degrees either side of straight ahead
         private const float RoadRadius = 120f;
         private const float RoadRebuildAfter = 30f;
+        private const float BuildingRadius = 100f;
         private const float RouteAhead = 70f;
         private const float RouteWidth = 1.95f;   // the car's own width, as Tesla draws its path
         private const float FieldOfView = 38f;
+        private const float SpotRange = 30f;        // free spots this close to the planned spot, or to a slow car, are drawn
+        private const float SpotsNearPlanned = 90f; // the planned spot's lot shows once the car is this close to it
+        private const float SpotsBelowKmh = 12f;    // without a planned spot, spots show only when crawling, as when looking for one
+        private const float SpotLine = 0.16f;
+        private static readonly Color SpotColour = new Color(0.42f, 0.435f, 0.46f);       // #6B6F75
+        private static readonly Color TargetColour = new Color(0.173f, 0.49f, 0.98f);     // #2C7DFA, as the route
+        private static readonly Color TargetFill = new Color(0.106f, 0.2f, 0.345f);       // #1B3358
 
         // Chase camera: metres behind, above, and the ground point ahead it looks at. Close is the normal view; wide
         // shows more of a junction before a turn and of the road at speed.
@@ -60,6 +70,7 @@ namespace Yesla.Visual
         private static readonly Color PersonColour = new Color(0.659f, 0.671f, 0.69f);
         private static readonly Color HousingColour = new Color(0.165f, 0.169f, 0.18f);  // #2A2B2E
         private static readonly Color LampOffColour = new Color(0.23f, 0.235f, 0.25f);
+        private static readonly Color BuildingColour = new Color(0.62f, 0.64f, 0.68f, 0.4f);  // #9EA3AD, see-through
 
         internal static RenderTexture Texture { get; private set; }
         internal static bool Built => _root != null;
@@ -71,6 +82,12 @@ namespace Yesla.Visual
         private static Material _roadMat, _lineMat, _edgeMat, _centreMat, _routeMat, _ownMat, _ownDarkMat, _carMat, _carDarkMat, _leadMat, _leadDarkMat,
             _personMat, _redMat, _orangeMat, _greenMat, _lampOffMat, _housingMat, _shadowMat, _glowMat;
         private static Mesh _carMesh, _capsule, _sphere, _cube, _figure, _flat, _roadMesh, _lineMesh, _edgeMesh, _centreMesh, _routeMesh;
+        private static Mesh _spotMesh, _targetMesh, _targetFillMesh, _walkMesh;
+        private static Material _buildingMat;
+        private static TextMeshPro _spotLabel;
+        private static readonly List<ParkTarget> Spots = new List<ParkTarget>();
+        private static float _nextSpots;
+        private static int _spotsShown = -1;
         private static Il2CppReferenceArray<Material> _carMats, _leadMats;
         private static readonly List<Texture2D> Textures = new List<Texture2D>();
         private static MeshRenderer _paint;
@@ -145,6 +162,7 @@ namespace Yesla.Visual
                 _leadMat = Shaded(LeadColour, 0.3f);
                 _leadDarkMat = Shaded(LeadDarkColour, 0.5f);
                 _personMat = Shaded(PersonColour, 0.15f);
+                _buildingMat = SeeThrough(BuildingColour);
                 _carMats = Pair(_carMat, _carDarkMat);
                 _leadMats = Pair(_leadMat, _leadDarkMat);
 
@@ -162,7 +180,16 @@ namespace Yesla.Visual
                 Static("Edges", _edgeMesh, _edgeMat);
                 Static("Lines", _lineMesh, _lineMat);
                 Static("Centre", _centreMesh, _centreMat);
+                _walkMesh = new Mesh { name = "YeslaViz_Crosswalks" };
+                Static("Crosswalks", _walkMesh, Ground(Flat(LineColour), 3));
                 Static("Route", _routeMesh, _routeMat);
+                _spotMesh = new Mesh { name = "YeslaViz_Spots" };
+                _targetMesh = new Mesh { name = "YeslaViz_TargetSpot" };
+                _targetFillMesh = new Mesh { name = "YeslaViz_TargetFill" };
+                Static("TargetFill", _targetFillMesh, Ground(Flat(TargetFill), 1));
+                Static("Spots", _spotMesh, Ground(Flat(SpotColour), 2));
+                Static("TargetSpot", _targetMesh, Ground(Flat(TargetColour), 3));
+                _spotLabel = SpotLabel();
 
                 _paint = PaintRenderer(car);
                 _own = CarProxy("Own", _ownMat, _ownDarkMat);
@@ -201,6 +228,8 @@ namespace Yesla.Visual
                 Fade(camGo.transform);
                 VizOverlay.Build(_cam);
                 _roadBuilt = false;
+                _nextSpots = 0f;
+                _spotsShown = -1;
                 _zoom = 0f;
                 _nextPaint = 0f;
                 Core.Log.Msg("[Viz] stand-in world built at " + Origin + " on layer " + Layer + " (" + LayerMask.LayerToName(Layer) + "), texture " + Width + "x" + Height + ".");
@@ -217,6 +246,9 @@ namespace Yesla.Visual
         /// <summary>Moves the stand-ins and renders, at most 15 times a second.</summary>
         internal static void Tick(LandVehicle car)
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.VizScene.Tick");
+#endif
             if (_root == null || car == null) return;
             float now = Time.unscaledTime;
             if (now < _nextRender) return;
@@ -227,11 +259,13 @@ namespace Yesla.Visual
             if (!_roadBuilt || Flat(pos - _roadCentre).magnitude > RoadRebuildAfter)
             {
                 int lanes = VizRoads.Build(pos, RoadRadius, _roadMesh, _lineMesh, _edgeMesh, _centreMesh);
-                if (!_roadBuilt) Core.Log.Msg("[Viz] road around " + pos.ToString("F0") + ": " + lanes + " lane(s), " + VizRoads.TwoWay + " beside oncoming traffic.");
+                int walks = VizRoads.Crosswalks(pos, RoadRadius, _walkMesh);
+                if (!_roadBuilt) Core.Log.Msg("[Viz] road around " + pos.ToString("F0") + ": " + lanes + " lane(s), " + VizRoads.TwoWay + " beside oncoming traffic, " + VizRoads.Junctions + " junction(s), " + walks + " crossing(s).");
                 _roadCentre = pos;
                 _roadBuilt = true;
             }
 
+            VizBuildings.Tick(pos, BuildingRadius, _root.transform, _buildingMat, _cube);
             Place(_own, car, _carBounds);
             if (now >= _nextPaint) { UpdatePaint(); _nextPaint = now + 1f; }
             Info = Route.Update(car, _routeMesh, RouteAhead, RouteWidth, _pin);
@@ -239,6 +273,13 @@ namespace Yesla.Visual
             PlaceCars(car, pos);
             PlacePeople(car, pos);
             PlaceLights(car, pos);
+            if (now >= _nextSpots) { PlaceSpots(car, pos); _nextSpots = now + 1f; }
+            if (_spotLabel.gameObject.activeSelf)
+            {
+                _spotLabel.transform.rotation = Quaternion.LookRotation(Vector3.down, _heading.sqrMagnitude > 0.01f ? _heading : Vector3.forward);
+                // The blue spot marks the destination; the pin would sit on top of it.
+                _pin.gameObject.SetActive(false);
+            }
             Info.SpeedKmh = Mathf.Abs(car.Speed_Kmh);
             Info.LimitKmh = SpeedLimit(pos);
             AimCamera(car);
@@ -255,6 +296,96 @@ namespace Yesla.Visual
                 _lastCostLog = now;
                 _msSum = 0; _renders = 0;
             }
+        }
+
+        /// <summary>
+        /// Parking spots, as Tesla draws them: the free bays the car could take as grey outlines open towards the
+        /// aisle, the one it parks in or drives to filled blue with a "P". Once a second; each free check is a box
+        /// overlap in the real world.
+        /// </summary>
+        private static void PlaceSpots(LandVehicle car, Vector3 pos)
+        {
+            ParkTarget planned = Autopilot.PlannedSpot;
+            if (planned != null && planned.Kerb) planned = null;
+            bool near = planned != null && Flat(planned.Centre - pos).magnitude < SpotsNearPlanned;
+            bool crawl = Mathf.Abs(car.Speed_Kmh) < SpotsBelowKmh;
+            Spots.Clear();
+            if (near || crawl) Parking.Nearby(car, near ? planned.Centre : pos, SpotRange, Spots);
+
+            var v = new List<Vector3>();
+            var t = new List<int>();
+            Vector3 dims = car.BoundingBoxDimensions;
+            float halfW = dims.x * 0.5f + 0.35f, halfL = dims.z * 0.5f + 0.3f;
+            foreach (ParkTarget s in Spots)
+            {
+                if (planned != null && s.Spot != null && planned.Spot != null && s.Spot.Pointer == planned.Spot.Pointer) continue;
+                Outline(v, t, OnFloor(car, s), s.Into, halfW, halfL, false);
+            }
+            VizRoads.Fill(_spotMesh, v, t);
+
+            v.Clear(); t.Clear();
+            var fv = new List<Vector3>();
+            var ft = new List<int>();
+            if (near)
+            {
+                Vector3 c = OnFloor(car, planned);
+                Outline(v, t, c, planned.Into, halfW, halfL, true);
+                Vector3 right = Vector3.Cross(Vector3.up, planned.Heading);
+                VizRoads.Quad(fv, ft, c - planned.Heading * halfL, c + planned.Heading * halfL, right, 0f, halfW * 2f, 0.01f);
+                _spotLabel.transform.position = Origin + c + Vector3.up * 0.05f;
+            }
+            VizRoads.Fill(_targetMesh, v, t);
+            VizRoads.Fill(_targetFillMesh, fv, ft);
+            _spotLabel.gameObject.SetActive(near);
+
+            int shown = Spots.Count + (near ? 1000 : 0);
+            if (shown != _spotsShown)
+            {
+                Core.Log.Msg("[Viz] parking: " + Spots.Count + " free spot(s) shown" + (near ? ", target " + planned.Label : "") + ".");
+                _spotsShown = shown;
+            }
+        }
+
+        /// <summary>
+        /// A spot's centre on the asphalt. The spot's own centre is where the car's pivot goes, well above the ground,
+        /// and paint drawn there covers the lower half of the car standing in it.
+        /// </summary>
+        private static Vector3 OnFloor(LandVehicle car, ParkTarget s)
+        {
+            Vector3 c = s.Centre;
+            c.y = Parking.Ground(car, c);
+            return c;
+        }
+
+        /// <summary>A bay's lines around <paramref name="c"/> on the floor; the side towards the aisle stays open unless <paramref name="closed"/>.</summary>
+        private static void Outline(List<Vector3> v, List<int> t, Vector3 c, Vector3 h, float halfW, float halfL, bool closed)
+        {
+            Vector3 r = Vector3.Cross(Vector3.up, h);
+            Vector3 back = c - h * halfL, front = c + h * halfL;
+            VizRoads.Quad(v, t, back - r * halfW, front - r * halfW, r, 0f, SpotLine, 0.03f);
+            VizRoads.Quad(v, t, back + r * halfW, front + r * halfW, r, 0f, SpotLine, 0.03f);
+            VizRoads.Quad(v, t, front - r * (halfW + SpotLine * 0.5f), front + r * (halfW + SpotLine * 0.5f), h, 0f, SpotLine, 0.03f);
+            if (closed) VizRoads.Quad(v, t, back - r * (halfW + SpotLine * 0.5f), back + r * (halfW + SpotLine * 0.5f), h, 0f, SpotLine, 0.03f);
+        }
+
+        private static TextMeshPro SpotLabel()
+        {
+            var go = new GameObject("TargetSpotLabel") { layer = Layer };
+            go.transform.SetParent(_root.transform, false);
+            var tmp = go.AddComponent<TextMeshPro>();
+            TMP_FontAsset font = VizOverlay.FindFont();
+            if (font != null) tmp.font = font;
+            else Core.Log.Warning("[Viz] no font for the parking 'P' - TextMeshPro's default draws it.");
+            tmp.enableAutoSizing = false;
+            tmp.fontSize = 16f;
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.alignment = TextAlignmentOptions.Midline;
+            tmp.enableWordWrapping = false;
+            tmp.color = Color.white;
+            tmp.rectTransform.sizeDelta = new Vector2(3f, 3f);
+            tmp.text = "P";
+            go.SetActive(false);
+            return tmp;
         }
 
         private static void AimCamera(LandVehicle car)
@@ -789,6 +920,21 @@ namespace Yesla.Visual
             return m;
         }
 
+        /// <summary>
+        /// Buildings: lit, so their walls and roofs read as shapes, and see-through, so a car, a person or the route
+        /// behind one still shows, as on Tesla's display. Drawn after the route and the ground overlays.
+        /// </summary>
+        private static Material SeeThrough(Color c)
+        {
+            Material m = Shaded(c, 0.05f);
+            Vehicle.GlbModel.MakeTransparent(m);
+            // The texture's alpha stays 1 for the same reason as in Fading.
+            m.SetFloat("_SrcBlendAlpha", 0f);
+            m.SetFloat("_DstBlendAlpha", 1f);
+            m.renderQueue = 2950;
+            return m;
+        }
+
         internal static Material Flat(Color c)
         {
             var m = new Material(_unlit);
@@ -869,6 +1015,7 @@ namespace Yesla.Visual
         internal static void Destroy()
         {
             VizOverlay.Reset();
+            VizBuildings.Reset();
             if (_root != null) UnityEngine.Object.Destroy(_root);
             if (Texture != null) { Texture.Release(); UnityEngine.Object.Destroy(Texture); }
             if (_carMesh != null) UnityEngine.Object.Destroy(_carMesh);

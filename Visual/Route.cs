@@ -145,7 +145,7 @@ namespace Yesla.Visual
         private static string StateText(LandVehicle car, out bool driving)
         {
             driving = Autopilot.DrivenCar != null && Autopilot.DrivenCar.Pointer == car.Pointer;
-            if (driving) return "Assisted Driving";
+            if (driving) return Autopilot.State == DriveState.Parking ? "Parking" : "Assisted Driving";
             switch (Autopilot.State)
             {
                 case DriveState.Ready: return "Ready";

@@ -226,7 +226,7 @@ namespace Yesla.Visual
         }
 
         /// <summary>The game's own Open Sans, bold where it has it; null falls back to TextMeshPro's default.</summary>
-        private static TMP_FontAsset FindFont()
+        internal static TMP_FontAsset FindFont()
         {
             TMP_FontAsset best = null;
             int bestScore = -1;

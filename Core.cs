@@ -70,11 +70,13 @@ namespace Yesla
         private static void ResetWorld()
         {
             Autopilot.Reset();
+            Parking.Reset();
             Summon.Reset();
             PathFollower.Reset();
             RoadRouter.Reset();
             Vehicle.Sentry.Reset();
             Vehicle.Fleet.Reset();
+            Vehicle.Plate.Reset();
             DestinationMarker.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
@@ -92,7 +94,9 @@ namespace Yesla
             Vehicle.Fleet.Tick();
             Autopilot.Tick();
             Summon.Tick();
+            if (Net.YeslaNet.IsHost) Parking.HostTick();
             Vehicle.Sentry.Tick();
+            Vehicle.Plate.Tick();
             DestinationMarker.Tick();
             FirstPerson.Tick();
             Visual.Viz.Tick();
@@ -105,6 +109,7 @@ namespace Yesla
             if (!_inWorld) return;
             // After VehicleAgent.LateUpdate has written its overrides; reads the driver's own input for a takeover.
             Autopilot.LateTick();
+            Parking.LateTick();
             PathFollower.LateTick();
             Visual.Viz.LateTick();
 #if DEBUG

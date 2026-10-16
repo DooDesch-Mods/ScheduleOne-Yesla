@@ -38,6 +38,12 @@ namespace Yesla.Driving
         private const float MinLookahead = 4f;
         private const float LookaheadPerMs = 0.7f;
         private const float MaxLookahead = 20f;
+        /// <summary>Pure pursuit cuts a bend of radius R by about L^2 / 8R with lookahead L. In a bend the lookahead
+        /// shrinks so the cut stays under this many metres; past it a right turn reaches the kerb and a left turn the
+        /// oncoming lane.</summary>
+        private const float MaxCut = 0.35f;
+        /// <summary>The shortest lookahead in a tight bend, in metres; below it the steering starts to hunt.</summary>
+        private const float BendLookahead = 3f;
 
         /// <summary>The speed plan is redone this often; vanilla's agent ticks at 30 Hz.</summary>
         private const float PlanSeconds = 0.1f;
@@ -46,6 +52,12 @@ namespace Yesla.Driving
         /// mistaken for progress.</summary>
         private const int SearchBack = 2;
         private const int SearchAhead = 25;
+
+        /// <summary>
+        /// Steering lock in degrees: full at a crawl, so tight corners and turns take one sweep, back to the 35 degrees
+        /// vanilla's road AI uses at speed, where the pursuit asks for small angles anyway.
+        /// </summary>
+        private const float CrawlLock = 45f, SpeedLock = 35f, CrawlLockBelowKmh = 10f, SpeedLockFromKmh = 30f;
 
         /// <summary>Heading error in degrees above which a reverse steers to turn the car, below it backs straight.</summary>
         private const float ReverseTurnAbove = 20f;
@@ -65,6 +77,17 @@ namespace Yesla.Driving
         private const float BypassOffset = 2.6f;
         private const float BypassLength = 14f;
         private const float BypassSpeedKmh = 8f;
+        /// <summary>How often the car's corners are swept along its current steering.</summary>
+        private const float CornerSeconds = 0.1f;
+        /// <summary>Braking assumed for a post at a corner, and the furthest the sweep looks.</summary>
+        private const float CornerBrake = 2.5f;
+        private const float CornerReach = 8f;
+        /// <summary>Gap the car stops short of a post at a corner.</summary>
+        private const float CornerGap = 0.5f;
+        /// <summary>A post at a side moves the aim point this far away from it, at these rates out and back.</summary>
+        private const float NudgeMetres = 1f;
+        private const float NudgeRate = 2f;
+        private const float NudgeRelax = 0.5f;
         private const float OffsetRate = 1.5f;
 
         /// <summary>Reverse manoeuvres without 10 m of progress in between before the car is given up.</summary>
@@ -72,6 +95,10 @@ namespace Yesla.Driving
         /// <summary>An empty car waits this long at a closed police checkpoint before it gives up.</summary>
         private const float CheckpointGiveUpSeconds = 10f;
         private const float ProgressResetsReverses = 10f;
+        /// <summary>A wheel sweep hit whose surface tilts less than this from level, in degrees, is a ramp to drive
+        /// up (a bridge, a driveway), not something to stop for.</summary>
+        private const float RampDeg = 40f;
+        private const float RampKmh = 12f;
 
         /// <summary>Everything one followed car carries between ticks.</summary>
         private sealed class Follow
@@ -98,6 +125,12 @@ namespace Yesla.Driving
             internal Vector3 ManoeuvreFrom;
             internal bool BypassAfterReverse;
             internal float Offset;
+            internal float Nudge;                  // metres to the left (negative: right) away from a post at a corner
+            internal float NextCorner;
+            internal float CornerAt = float.MaxValue;
+            internal int CornerSide;
+            internal string CornerWhat = string.Empty;
+            internal IntPtr CornerSeen;
             internal float WaitFor;
             internal float SweepWait;
             internal float WedgedFor;
@@ -106,6 +139,12 @@ namespace Yesla.Driving
             internal int VanillaReversesStopped;
             internal float LastReverseStopLog = -100f;
             internal string LastLine = string.Empty;
+
+            internal float Cte;                    // signed distance from the path, + left of it
+            internal float WorstLeft, WorstRight;  // the furthest off the line this drive, for the log
+            internal float NextCteLog;
+            internal IntPtr RampSeen;              // the ramp last driven onto, logged once
+            internal bool OnLine;                  // the car has reached the line once; the start can be off it
         }
 
         private static readonly Dictionary<IntPtr, Follow> Cars = new Dictionary<IntPtr, Follow>();
@@ -169,12 +208,33 @@ namespace Yesla.Driving
             Cars.Remove(car.Pointer);
         }
 
+        /// <summary>
+        /// Who a route from <paramref name="start"/> to <paramref name="end"/> is being searched for: a followed car
+        /// whose front is at the start and whose road AI is headed for the end. Null for every other car.
+        /// </summary>
+        internal static string WhoseRoute(Vector3 start, Vector3 end)
+        {
+            foreach (Follow f in Cars.Values)
+            {
+                VehicleAgent agent = f.Car != null ? f.Car.Agent : null;
+                if (agent == null) continue;
+                Vector3 front = agent.frontOfVehiclePosition;
+                if ((front - start).sqrMagnitude > 10f * 10f) continue;
+                if ((agent.TargetLocation - end).sqrMagnitude > 25f * 25f) continue;
+                return f.Who;
+            }
+            return null;
+        }
+
         /// <summary>The last state line for <paramref name="car"/>, or empty when it is not followed.</summary>
         internal static string LastLineFor(LandVehicle car) =>
             car != null && Cars.TryGetValue(car.Pointer, out Follow f) ? f.LastLine : string.Empty;
 
         private static void Postfix(VehicleAgent __instance)
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.PathFollower.Steer");
+#endif
             try
             {
                 if (Cars.Count == 0) return;
@@ -218,12 +278,17 @@ namespace Yesla.Driving
             {
                 f.Path = path;
                 f.Progress = Closest(pts, car.transform.position, 0, pts.Count - 2, out _);
-                Core.Log.Msg("[PathFollower] " + f.Who + " following a new path: " + pts.Count + " points, starting at #" + f.Progress);
+                Core.Log.Msg("[PathFollower] " + f.Who + " following a new path: " + pts.Count + " points, starting at #" + f.Progress
+                             + ", steering lock " + CrawlLock + " deg below " + CrawlLockBelowKmh + " km/h, " + SpeedLock + " deg from " + SpeedLockFromKmh + " km/h");
             }
+            // Vanilla's Navigate set its own 35 degrees once; this replaces it on every update and its reset at the end
+            // of the drive restores the car's own lock.
+            car.OverrideMaxSteerAngle(Mathf.Lerp(CrawlLock, SpeedLock, Mathf.InverseLerp(CrawlLockBelowKmh, SpeedLockFromKmh, Mathf.Abs(car.Speed_Kmh))));
 
             Vector3 pos = car.transform.position;
             int seg = Closest(pts, pos, f.Progress - SearchBack, f.Progress + SearchAhead, out float lerp);
             if (seg > f.Progress) f.Progress = seg;
+            TrackLine(f, pts, seg, lerp, pos, car, now);
             if (f.Reverses > 0 && Vector3.Distance(pos, f.LastReverseAt) > ProgressResetsReverses) f.Reverses = 0;
 
             if (f.Manoeuvre == Manoeuvre.Reverse)
@@ -246,15 +311,44 @@ namespace Yesla.Driving
 
             float speedMs = Mathf.Abs(car.Speed_Kmh) / 3.6f;
             float lookahead = Mathf.Clamp(MinLookahead + speedMs * LookaheadPerMs, MinLookahead, MaxLookahead);
+            // Off the line (the start, after a bypass) a short aim point lies beside the car and turns it into the
+            // kerb; the cap only holds once the car is on the line, and never below twice the distance to it.
+            if (f.OnLine && f.Manoeuvre == Manoeuvre.Follow)
+                lookahead = Mathf.Max(Mathf.Max(BendLookahead, 2f * Mathf.Abs(f.Cte)), Mathf.Min(lookahead, BendCap(pts, seg, lookahead + 4f)));
+            // The car's own corners on its current steering: a lamp post or a hydrant beside a tight bend, which
+            // the line ahead and vanilla's sensors miss. One at a side moves the aim point away from it.
+            if (now >= f.NextCorner)
+            {
+                f.NextCorner = now + CornerSeconds;
+                float reach = Mathf.Clamp(1.5f + speedMs * speedMs / (2f * CornerBrake), 1.5f, CornerReach);
+                if (Footprint.Sweep(car, 1f, reach, out float cAt, out int cSide, out Collider cHit, out string cWhat))
+                {
+                    f.CornerAt = cAt;
+                    f.CornerSide = cSide;
+                    f.CornerWhat = cWhat;
+                    if (cHit.Pointer != f.CornerSeen)
+                    {
+                        f.CornerSeen = cHit.Pointer;
+                        Core.Log.Msg("[PathFollower] " + f.Who + ": " + cWhat + " in " + cAt.ToString("F1") + " m at the car's "
+                                     + (cSide < 0 ? "left" : cSide > 0 ? "right" : "front") + " on the current steering - slowing"
+                                     + (cSide != 0 ? " and keeping " + NudgeMetres.ToString("F0") + " m to the " + (cSide > 0 ? "left" : "right") : "") + ".");
+                    }
+                }
+                else { f.CornerAt = float.MaxValue; f.CornerSide = 0; }
+            }
+            bool cornerHit = f.CornerAt < float.MaxValue;
+            f.Nudge = Mathf.MoveTowards(f.Nudge, cornerHit ? f.CornerSide * NudgeMetres : 0f, (cornerHit ? NudgeRate : NudgeRelax) * dt);
+
             Vector3 target = PathUtility.GetAheadPoint(path, pos, lookahead, seg, lerp);
             if (target == Vector3.zero) target = pts[pts.Count - 1];
-            if (f.Offset > 0.01f)
+            float shift = f.Offset + f.Nudge;
+            if (Mathf.Abs(shift) > 0.01f)
             {
                 Vector3 beyond = PathUtility.GetAheadPoint(path, pos, lookahead + 1f, seg, lerp);
                 Vector3 dir = beyond - target; dir.y = 0f;
                 if (dir.sqrMagnitude < 1e-4f) dir = car.transform.forward;
                 dir.Normalize();
-                target += new Vector3(-dir.z, 0f, dir.x) * f.Offset;
+                target += new Vector3(-dir.z, 0f, dir.x) * shift;
             }
 
             float alpha = PursuitSteer(agent, car, target, out float steer);
@@ -273,6 +367,10 @@ namespace Yesla.Driving
             float heading = Mathf.Abs(alpha) * Mathf.Rad2Deg;
             if (heading > 35f) planned = Mathf.Min(planned, SpeedPlanner.MinKmh);
             if (planned < agent.targetSpeed) agent.targetSpeed = planned;
+            float cornerKmh = cornerHit ? Mathf.Sqrt(2f * CornerBrake * Mathf.Max(0f, f.CornerAt - CornerGap)) * 3.6f : float.MaxValue;
+            if (cornerKmh < agent.targetSpeed) agent.targetSpeed = cornerKmh;
+            if (agent.targetSpeed < 1f && planned > 3f && f.Manoeuvre == Manoeuvre.Follow && OnRamp(f, agent, car))
+                agent.targetSpeed = Mathf.Min(planned, RampKmh);
 
             if (f.Manoeuvre == Manoeuvre.Bypass)
             {
@@ -295,13 +393,37 @@ namespace Yesla.Driving
             {
                 CheckWaiting(f, agent, car, dt);
             }
+            if (cornerKmh < agent.targetSpeed) agent.targetSpeed = cornerKmh;
             CheckWedged(f, agent, car, dt);
 
             f.LastLine = f.Manoeuvre + " seg=" + seg + "/" + pts.Count + " look=" + lookahead.ToString("F1") + " alpha=" + heading.ToString("F0")
                        + " steer=" + steer.ToString("F2") + " plan=" + f.PlanKmh.ToString("F0") + " (" + f.PlanWhy + ") target=" + agent.targetSpeed.ToString("F0")
                        + " speed=" + car.Speed_Kmh.ToString("F0") + " " + f.Profile.Id
-                       + " offset=" + f.Offset.ToString("F1") + " wait=" + f.WaitFor.ToString("F1");
+                       + " offset=" + f.Offset.ToString("F1") + " cte=" + f.Cte.ToString("F1") + " worst L/R=" + f.WorstLeft.ToString("F1") + "/" + f.WorstRight.ToString("F1")
+                       + " wait=" + f.WaitFor.ToString("F1") + (cornerHit ? " corner=" + f.CornerWhat + "@" + f.CornerAt.ToString("F1") : "")
+                       + (Mathf.Abs(f.Nudge) > 0.05f ? " nudge=" + f.Nudge.ToString("F1") : "");
             LogLine(f, now);
+        }
+
+        /// <summary>
+        /// The longest lookahead that keeps the cut through the tightest bend within <paramref name="window"/> metres
+        /// ahead under <see cref="MaxCut"/>. Curvature is the turn at a point over the length around it.
+        /// </summary>
+        private static float BendCap(Il2CppSystem.Collections.Generic.List<Vector3> pts, int seg, float window)
+        {
+            float kappa = 0f, run = 0f;
+            for (int i = Mathf.Max(1, seg + 1); i < pts.Count - 1 && run < window; i++)
+            {
+                Vector3 a = pts[i] - pts[i - 1], b = pts[i + 1] - pts[i];
+                a.y = 0f; b.y = 0f;
+                float la = a.magnitude, lb = b.magnitude;
+                run += la;
+                if (la < 0.01f || lb < 0.01f) continue;
+                float k = Vector3.Angle(a, b) * Mathf.Deg2Rad / Mathf.Max(0.5f, 0.5f * (la + lb));
+                if (k > kappa) kappa = k;
+            }
+            if (kappa < 0.002f) return MaxLookahead;
+            return Mathf.Sqrt(8f * MaxCut / kappa);
         }
 
         /// <summary>Pure pursuit: the arc through <paramref name="target"/>, measured from the rear axle.
@@ -415,11 +537,32 @@ namespace Yesla.Driving
 
             string what = hit.collider != null
                 ? hit.collider.name + " (layer " + LayerMask.LayerToName(hit.collider.gameObject.layer) + ") at " + dist.ToString("F1") + " m by the " + (dl <= dr ? "left" : "right") + " front wheel"
-                : "nothing the sweep can see";
+                : f.CornerAt < float.MaxValue ? f.CornerWhat + " at the car's corner" : "nothing the sweep can see";
             Core.Log.Warning("[PathFollower] held at 0 km/h for " + f.Profile.WaitBeforeBypass + " s with no front sensor hit; wheel sweep: " + what
                            + ", reduction min=" + agent.speedReductionTracker.GetLowestValue().ToString("F2"));
             f.BypassAfterReverse = hit.collider != null;
             StartReverse(f, car, "blocked by " + what);
+        }
+
+        /// <summary>
+        /// Vanilla's wheel sweep stops the car for anything within reach of a front wheel, the start of a bridge ramp
+        /// included. A surface the car can drive up faces upwards; a kerb, a post or a person faces sideways.
+        /// </summary>
+        private static bool OnRamp(Follow f, VehicleAgent agent, LandVehicle car)
+        {
+            float steer = car.CurrentSteerAngle;
+            agent.GetWheelSweepCollision(VehicleAgent.ESweepType.FL, steer, false, out float dl, out RaycastHit hl);
+            agent.GetWheelSweepCollision(VehicleAgent.ESweepType.FR, steer, false, out float dr, out RaycastHit hr);
+            RaycastHit hit = dl <= dr ? hl : hr;
+            if (hit.collider == null) return false;
+            if (hit.collider.attachedRigidbody != null || Vector3.Angle(hit.normal, Vector3.up) > RampDeg) return false;
+            if (f.RampSeen != hit.collider.Pointer)
+            {
+                f.RampSeen = hit.collider.Pointer;
+                Core.Log.Msg("[PathFollower] " + f.Who + " drives up " + hit.collider.name + " (surface " + Vector3.Angle(hit.normal, Vector3.up).ToString("F0")
+                           + " deg from level) instead of stopping for it.");
+            }
+            return true;
         }
 
         /// <summary>Wants to move, gives throttle, stays put: wedged on a kerb, a wall or at a turn too sharp.</summary>
@@ -477,6 +620,9 @@ namespace Yesla.Driving
         /// </summary>
         internal static void LateTick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.PathFollower.LateTick");
+#endif
             if (Cars.Count == 0) return;
             foreach (var kv in Cars)
             {
@@ -515,6 +661,34 @@ namespace Yesla.Driving
             f.WaitFor = 0f; f.SweepWait = 0f;
             f.WedgedFor = 0f;
             if (next != Manoeuvre.Reverse) f.BypassAfterReverse = false;
+        }
+
+        /// <summary>Off the line this far, in metres, is logged: past it a car on the right-hand lane reaches the
+        /// centre line (left) or the kerb (right).</summary>
+        private const float CteWarn = 1.5f;
+
+        /// <summary>
+        /// Signed distance of the car from the path, + to the left. Left of the line is the oncoming lane, right of it
+        /// the pavement; the furthest each way is kept and a new worst beyond <see cref="CteWarn"/> is logged.
+        /// </summary>
+        private static void TrackLine(Follow f, Il2CppSystem.Collections.Generic.List<Vector3> pts, int seg, float lerp, Vector3 pos, LandVehicle car, float now)
+        {
+            if (f.Manoeuvre != Manoeuvre.Follow) { f.Cte = 0f; return; }
+            Vector3 a = pts[seg], b = pts[seg + 1];
+            Vector3 ab = b - a; ab.y = 0f;
+            Vector3 on = Vector3.Lerp(a, b, lerp);
+            Vector3 off = pos - on; off.y = 0f;
+            float side = Mathf.Sign(Vector3.Cross(ab, off).y);
+            f.Cte = -side * off.magnitude;
+            float d = Mathf.Abs(f.Cte);
+            if (!f.OnLine) { f.OnLine = d < 0.7f; return; }
+            if (f.Cte > 0f) f.WorstLeft = Mathf.Max(f.WorstLeft, d); else f.WorstRight = Mathf.Max(f.WorstRight, d);
+            if (d < CteWarn || now < f.NextCteLog) return;
+            f.NextCteLog = now + 1f;
+            float turn = 0f;
+            if (seg > 0 && seg + 2 < pts.Count) turn = Vector3.SignedAngle(pts[seg] - pts[seg - 1], pts[seg + 2] - pts[seg + 1], Vector3.up);
+            Core.Log.Msg("[PathFollower] " + f.Who + " off the line " + d.ToString("F1") + " m to the " + (f.Cte > 0f ? "left" : "right")
+                       + " at seg " + seg + " " + pos.ToString("F0") + ", " + car.Speed_Kmh.ToString("F0") + " km/h, path turning " + turn.ToString("F0") + " deg.");
         }
 
         private static void LogLine(Follow f, float now)

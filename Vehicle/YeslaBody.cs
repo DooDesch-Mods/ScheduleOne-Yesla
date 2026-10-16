@@ -71,6 +71,7 @@ namespace Yesla.Vehicle
                     else if (GlbModel.InGroup(part.MaterialName, "Light_Head")) head.Add(r);
                     else if (GlbModel.InGroup(part.MaterialName, "Light_Brake")) brake.Add(r);
                     else if (GlbModel.InGroup(part.MaterialName, "Light_Reverse")) reverse.Add(r);
+                    else if (i == 0 && GlbModel.InGroup(part.MaterialName, "Licence_Plate")) Plate.Fit(lodRoot.transform, r, layer);
                 }
             }
 

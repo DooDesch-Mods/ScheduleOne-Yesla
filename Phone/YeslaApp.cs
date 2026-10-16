@@ -1,5 +1,7 @@
+using System;
 using System.Globalization;
 using Il2CppScheduleOne.Vehicles;
+using Il2CppScheduleOne.Vehicles.Modification;
 using Sideload.Api;
 using Yesla.Config;
 using Yesla.Driving;
@@ -42,10 +44,14 @@ namespace Yesla.Phone
                 .OnCall("yesla.send.point", xy => Guard("send.point", () => SendPoint(xy)))
                 .OnCall("yesla.clear", _ => Guard("clear", Clear))
                 .OnCall("yesla.profile", id => Guard("profile", () => DriveProfile.Select(id) != null ? "ok" : "error:Unknown drive profile."))
+                .OnCall("yesla.parking", mode => Guard("parking", () => SetParking(mode)))
                 .OnCall("yesla.summon", _ => Guard("summon", ToggleSummon))
                 .OnCall("yesla.honk", _ => Guard("honk", () => Answer(Remote.Honk(MyCar()))))
                 .OnCall("yesla.lock", _ => Guard("lock", () => Answer(Remote.ToggleLock(MyCar()))))
-                .OnCall("yesla.sentry", _ => Guard("sentry", () => Answer(Remote.ToggleSentry(MyCar()))));
+                .OnCall("yesla.sentry", _ => Guard("sentry", () => Answer(Remote.ToggleSentry(MyCar()))))
+                .OnCall("yesla.palette", _ => Guard("palette", PaletteJson))
+                .OnCall("yesla.paint", id => Guard("paint", () => Paint(id)))
+                .OnCall("yesla.plate", text => Guard("plate", () => Answer(Remote.SetPlate(MyCar(), text))));
             Summon.MineChanged += OnSummonChanged;
             Sentry.Alerted += OnSentryAlert;
             Core.Log.Msg(Apps.Available
@@ -55,6 +61,9 @@ namespace Yesla.Phone
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.YeslaApp.Tick");
+#endif
             if (_app == null) return;
             float now = Time.unscaledTime;
             if (now < _nextPulse) return;
@@ -126,6 +135,7 @@ namespace Yesla.Phone
         internal static void Reset()
         {
             MapPicture.Reset();
+            CarPicture.Reset();
             _pushedState = int.MinValue;
             _pushedPlaces = int.MinValue;
             _iconShown = null;
@@ -169,6 +179,7 @@ namespace Yesla.Phone
             if (car != null && MapGeo.TryNormalise(car.transform.position, out double cx, out double cy))
             {
                 Fleet.Rec rec = Fleet.For(car);
+                EVehicleColor paint = car.OwnedColor;
                 j.Key("car").Open()
                     .Prop("x", cx).Prop("y", cy).Prop("h", car.transform.eulerAngles.y)
                     .Prop("name", car.VehicleName)
@@ -178,6 +189,12 @@ namespace Yesla.Phone
                     .Prop("mine", Fleet.IsMine(car))
                     .Prop("locked", rec != null && rec.Locked)
                     .Prop("sentry", rec != null && rec.Sentry)
+                    .Prop("paint", paint.ToString())
+                    .Prop("picture", CarPicture.Ensure(_app, paint) ?? "")
+                    .Prop("plate", rec != null ? rec.PlateText : "")
+                    .Prop("plateOwn", rec != null ? rec.Plate : "")
+                    .Prop("plateDefault", rec != null ? rec.DefaultPlate : "")
+                    .Prop("top", car.TopSpeed)
                     .Close();
                 var summon = Summon.StatusOf(car);
                 j.Key("summon").Open().Prop("state", summon.state.ToString()).Prop("reason", summon.reason).Close();
@@ -200,9 +217,56 @@ namespace Yesla.Phone
                 .Prop("reason", Autopilot.LastReason)
                 .Prop("key", Preferences.EngageKey.ToString())
                 .Prop("profile", DriveProfile.Current.Id)
+                .Prop("parking", Preferences.ParkDirection)
                 .Close();
 
             return j.Close().ToString();
+        }
+
+        /// <summary>Autopark direction from the phone: "auto", "reverse" or "forward".</summary>
+        private static string SetParking(string mode)
+        {
+            string m = (mode ?? string.Empty).Trim().ToLowerInvariant();
+            if (m != "auto" && m != "reverse" && m != "forward") { Core.Log.Warning("[App] unknown parking direction '" + mode + "'."); return "error:Unknown parking direction."; }
+            Preferences.ParkDirection = m;
+            Core.Log.Msg("[App] autopark set to " + (m == "auto" ? "pick per spot" : m == "reverse" ? "backwards" : "nose first") + ".");
+            return "ok";
+        }
+
+        /// <summary>The game's paints, in its own order; Custom is the editor's and has no colour of its own.</summary>
+        private static string PaletteJson()
+        {
+            var j = new Json().OpenArray();
+            if (Singleton<VehicleColors>.InstanceExists)
+            {
+                var lib = Singleton<VehicleColors>.Instance.colorLibrary;
+                for (int i = 0; i < lib.Count; i++)
+                {
+                    var c = lib[i];
+                    if (c == null || c.color == EVehicleColor.Custom) continue;
+                    Color32 ui = c.UIColor;
+                    j.Open().Prop("id", c.color.ToString()).Prop("name", c.colorName)
+                     .Prop("hex", "#" + ui.r.ToString("x2") + ui.g.ToString("x2") + ui.b.ToString("x2")).Close();
+                }
+            }
+            else Core.Log.Warning("[App] no VehicleColors - the paint tab is empty.");
+            return j.CloseArray().ToString();
+        }
+
+        /// <summary>Repaint through the game's own path: saved with the car and sent to every player.</summary>
+        private static string Paint(string id)
+        {
+            LandVehicle car = MyCar();
+            if (car == null) return "error:No Yesla.";
+            if (!Fleet.IsMine(car)) return "error:This Yesla is not yours.";
+            if (!Enum.TryParse(id, out EVehicleColor paint) || paint == EVehicleColor.Custom)
+            {
+                Core.Log.Warning("[App] paint: unknown paint '" + id + "'.");
+                return "error:Unknown paint.";
+            }
+            car.SendOwnedColor(paint);
+            Core.Log.Msg("[App] " + car.VehicleName + " #" + Fleet.NetId(car) + " repainted " + paint + ".");
+            return "ok";
         }
 
         private static string PlacesJson()
@@ -294,6 +358,7 @@ namespace Yesla.Phone
                     h = h * 31 + (int)(c.x / 2f);
                     h = h * 31 + (int)(c.z / 2f);
                     h = h * 31 + (int)(Mathf.Abs(car.Speed_Kmh) / 2f);
+                    h = h * 31 + (int)car.OwnedColor;
                 }
                 h = h * 31 + (int)Autopilot.State;
                 h = h * 31 + (Autopilot.Destination.HasValue ? Autopilot.Destination.Value.GetHashCode() : 0);
@@ -311,7 +376,7 @@ namespace Yesla.Phone
             catch (Exception e)
             {
                 Core.Log.Error("[App] " + what + " failed: " + e);
-                return what == "state" || what == "places" ? "" : "error:" + e.Message;
+                return what == "state" || what == "places" || what == "palette" ? "" : "error:" + e.Message;
             }
         }
     }

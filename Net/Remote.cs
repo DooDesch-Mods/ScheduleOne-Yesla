@@ -46,6 +46,22 @@ namespace Yesla.Net
             return null;
         }
 
+        /// <summary>Ask the host for a new plate; empty text asks for the factory plate back.</summary>
+        internal static string SetPlate(LandVehicle car, string text)
+        {
+            if (car == null) return "No Yesla.";
+            if (!Fleet.IsMine(car)) return "This Yesla is not yours.";
+            YeslaNet.ToHost("req.plate", Id(car), Fleet.MyCode(), Plate.Clean(text));
+            return null;
+        }
+
+        /// <summary>Tell the host this car now stands in a lot spot, so no NPC car is parked into it.</summary>
+        internal static void TakeSpot(LandVehicle car, ParkTarget spot)
+        {
+            if (car == null || spot == null || spot.Lot == null) return;
+            YeslaNet.ToHost("req.park", Id(car), Fleet.MyCode(), spot.LotGuid, spot.Index.ToString(CultureInfo.InvariantCulture));
+        }
+
         private static string Id(LandVehicle car) => Fleet.NetId(car).ToString(CultureInfo.InvariantCulture);
 
         // ---- host --------------------------------------------------------------------------------------------------
@@ -85,6 +101,21 @@ namespace Yesla.Net
                         bool on = m.Arg(2) == "1";
                         string refused = m.Op == "req.lock" ? Fleet.Set(car, m.Arg(1), on, null) : Fleet.Set(car, m.Arg(1), null, on);
                         if (refused != null) Core.Log.Warning("[Remote] " + m.Op + " refused: " + refused + ".");
+                        return;
+                    }
+                case "req.plate":
+                    {
+                        LandVehicle car = OwnedCar(m, out string why);
+                        if (car == null) { Core.Log.Warning("[Remote] plate refused: " + why + "."); return; }
+                        string refused = Fleet.SetPlate(car, m.Arg(1), m.Arg(2));
+                        if (refused != null) Core.Log.Warning("[Remote] plate refused: " + refused + ".");
+                        return;
+                    }
+                case "req.park":
+                    {
+                        LandVehicle car = OwnedCar(m, out string why);
+                        if (car == null) { Core.Log.Warning("[Remote] park refused: " + why + "."); return; }
+                        Parking.HostTake(car, m.Arg(2), m.Arg(3));
                         return;
                     }
                 default:

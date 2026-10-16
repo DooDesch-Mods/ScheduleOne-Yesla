@@ -39,6 +39,9 @@ namespace Yesla.Vehicle
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Sentry.Tick");
+#endif
             if (!YeslaNet.IsHost) return;
             float now = Time.time;
             if (now < _nextScan) return;

@@ -25,10 +25,17 @@ namespace Yesla.Vehicle
             internal string Owner = string.Empty;   // Player.PlayerCode
             internal bool Locked;
             internal bool Sentry;
+            internal string Plate = string.Empty;        // the owner's own plate, empty for the factory one
+            internal string DefaultPlate = string.Empty; // "YESLA" and three digits from the save GUID
 
-            internal Rec Copy() => new Rec { Owner = Owner, Locked = Locked, Sentry = Sentry };
-            internal bool Same(Rec o) => o != null && o.Owner == Owner && o.Locked == Locked && o.Sentry == Sentry;
+            internal string PlateText => Plate.Length > 0 ? Plate : DefaultPlate;
+
+            internal bool Same(Rec o) => o != null && o.Owner == Owner && o.Locked == Locked && o.Sentry == Sentry
+                                         && o.Plate == Plate && o.DefaultPlate == DefaultPlate;
         }
+
+        private static Rec NewRec(string guid, string owner) =>
+            new Rec { Owner = owner, DefaultPlate = Vehicle.Plate.Default(guid) };
 
         private const string FileName = "Yesla.cars";
         private const float ScanSeconds = 1f;
@@ -116,7 +123,7 @@ namespace Yesla.Vehicle
             if (!YeslaNet.IsHost) { Core.Log.Warning("[Fleet] claim on a client ignored - the host records owners."); return; }
             if (car == null || string.IsNullOrEmpty(owner)) { Core.Log.Warning("[Fleet] claim without a car or owner (" + why + ") ignored."); return; }
             string guid = car.GUID.ToString();
-            ByGuid[guid] = new Rec { Owner = owner };
+            ByGuid[guid] = NewRec(guid, owner);
             Core.Log.Msg("[Fleet] " + car.VehicleName + " " + guid.Substring(0, 6) + " now belongs to " + owner + " (" + why + ").");
             Save();
             Broadcast(force: true);
@@ -145,12 +152,29 @@ namespace Yesla.Vehicle
             return null;
         }
 
+        /// <summary>Host: give a car a plate. Empty text puts the factory plate back. Returns why it was refused, or null.</summary>
+        internal static string SetPlate(LandVehicle car, string requester, string text)
+        {
+            if (!YeslaNet.IsHost) return "only the host changes a car";
+            if (!ByGuid.TryGetValue(car.GUID.ToString(), out Rec r)) return "the car has no owner record";
+            if (r.Owner != requester) return "not the owner";
+            r.Plate = Vehicle.Plate.Clean(text);
+            Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": plate '" + r.PlateText + "'" + (r.Plate.Length == 0 ? " (factory)" : string.Empty)
+                       + " (by " + requester + ").");
+            Save();
+            Broadcast(force: true);
+            return null;
+        }
+
         /// <summary>Host: the owner record for a car by save GUID, or null.</summary>
         internal static Rec HostRec(LandVehicle car) =>
             car != null && ByGuid.TryGetValue(car.GUID.ToString(), out Rec r) ? r : null;
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Fleet.Tick");
+#endif
             if (!YeslaNet.IsHost)
             {
                 // A client that joined late has not seen a broadcast yet; ask once.
@@ -195,7 +219,7 @@ namespace Yesla.Vehicle
                     if (!FirstSeen.TryGetValue(guid, out float seen)) { FirstSeen[guid] = now; continue; }
                     if (now - seen < ClaimSeconds) continue;
                 }
-                ByGuid[guid] = new Rec { Owner = host };
+                ByGuid[guid] = NewRec(guid, host);
                 Core.Log.Msg("[Fleet] " + v.VehicleName + " " + guid.Substring(0, 6) + " had no owner record - it belongs to the host (" + host + ").");
                 Save();
             }
@@ -216,7 +240,8 @@ namespace Yesla.Vehicle
                     if (v == null || !Phone.YeslaApp.IsYesla(v)) continue;
                     if (!ByGuid.TryGetValue(v.GUID.ToString(), out Rec r)) continue;
                     if (sb.Length > 0) sb.Append(';');
-                    sb.Append(NetId(v)).Append(',').Append(r.Owner).Append(',').Append(r.Locked ? 1 : 0).Append(',').Append(r.Sentry ? 1 : 0);
+                    sb.Append(NetId(v)).Append(',').Append(r.Owner).Append(',').Append(r.Locked ? 1 : 0).Append(',').Append(r.Sentry ? 1 : 0)
+                      .Append(',').Append(r.Plate).Append(',').Append(r.DefaultPlate);
                 }
             }
             string payload = sb.ToString();
@@ -233,7 +258,11 @@ namespace Yesla.Vehicle
             {
                 string[] f = entry.Split(',');
                 if (f.Length < 4 || !int.TryParse(f[0], out int id)) { Core.Log.Warning("[Fleet] unreadable car record '" + entry + "' skipped."); continue; }
-                next[id] = new Rec { Owner = f[1], Locked = f[2] == "1", Sentry = f[3] == "1" };
+                next[id] = new Rec
+                {
+                    Owner = f[1], Locked = f[2] == "1", Sentry = f[3] == "1",
+                    Plate = f.Length > 4 ? f[4] : string.Empty, DefaultPlate = f.Length > 5 ? f[5] : string.Empty,
+                };
             }
 
             bool changed = next.Count != ById.Count;
@@ -263,7 +292,11 @@ namespace Yesla.Vehicle
                 {
                     string[] f = line.Split('|');
                     if (f.Length < 4 || f[0].Length == 0) continue;
-                    ByGuid[f[0]] = new Rec { Owner = f[1], Locked = f[2] == "1", Sentry = f[3] == "1" };
+                    Rec r = NewRec(f[0], f[1]);
+                    r.Locked = f[2] == "1";
+                    r.Sentry = f[3] == "1";
+                    r.Plate = f.Length > 4 ? Vehicle.Plate.Clean(f[4]) : string.Empty;
+                    ByGuid[f[0]] = r;
                 }
                 Core.Log.Msg("[Fleet] loaded " + ByGuid.Count + " car record(s) from " + path + ".");
             }
@@ -278,7 +311,8 @@ namespace Yesla.Vehicle
             {
                 var sb = new StringBuilder();
                 foreach (var kv in ByGuid)
-                    sb.Append(kv.Key).Append('|').Append(kv.Value.Owner).Append('|').Append(kv.Value.Locked ? 1 : 0).Append('|').Append(kv.Value.Sentry ? 1 : 0).Append('\n');
+                    sb.Append(kv.Key).Append('|').Append(kv.Value.Owner).Append('|').Append(kv.Value.Locked ? 1 : 0).Append('|').Append(kv.Value.Sentry ? 1 : 0)
+                      .Append('|').Append(kv.Value.Plate).Append('\n');
                 File.WriteAllText(path, sb.ToString());
                 _loadedFrom = path;
             }
@@ -298,7 +332,7 @@ namespace Yesla.Vehicle
         {
             var sb = new StringBuilder("fleet me=" + MyCode() + " host=" + YeslaNet.IsHost);
             foreach (var kv in ById)
-                sb.Append(" [#").Append(kv.Key).Append(" owner=").Append(kv.Value.Owner).Append(" locked=").Append(kv.Value.Locked).Append(" sentry=").Append(kv.Value.Sentry).Append(']');
+                sb.Append(" [#").Append(kv.Key).Append(" owner=").Append(kv.Value.Owner).Append(" locked=").Append(kv.Value.Locked).Append(" sentry=").Append(kv.Value.Sentry).Append(" plate=").Append(kv.Value.PlateText).Append(']');
             return sb.ToString();
         }
 
@@ -307,7 +341,7 @@ namespace Yesla.Vehicle
             if (car == null) return "no car";
             Rec r = For(car);
             return car.VehicleName + " #" + NetId(car) + " owner=" + (r?.Owner ?? "unknown") + " me=" + MyCode()
-                + (r != null ? " locked=" + r.Locked + " sentry=" + r.Sentry : string.Empty);
+                + (r != null ? " locked=" + r.Locked + " sentry=" + r.Sentry + " plate='" + r.PlateText + "'" : string.Empty);
         }
 
         internal static void Reset()

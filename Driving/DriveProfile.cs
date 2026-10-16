@@ -50,7 +50,7 @@ namespace Yesla.Driving
         {
             Id = "madmax", Label = "Mad Max",
             NoLimit = true, MaxKmh = 200f,
-            LateralAccel = 5.5f, BrakeDecel = 5.5f, StopGap = 4f,
+            LateralAccel = 4.2f, BrakeDecel = 4.0f, StopGap = 4f,
             IgnoreTrafficLights = true,
             WaitBeforeBypass = 1.5f, WaitBehindTraffic = 5f,
         };

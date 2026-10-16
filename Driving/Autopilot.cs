@@ -6,7 +6,7 @@ using Yesla.Config;
 
 namespace Yesla.Driving
 {
-    internal enum DriveState { Off, Ready, Driving, Arrived, Aborted }
+    internal enum DriveState { Off, Ready, Driving, Parking, Arrived, Aborted }
 
     /// <summary>
     /// Yesla Assisted Driving for the local player: a destination, an engage key, and the vanilla road AI doing
@@ -15,6 +15,9 @@ namespace Yesla.Driving
     ///
     /// Taking over is instant and needs no key: steering, throttle, brake or handbrake input, leaving the seat, or
     /// the AI giving up all hand the car back.
+    ///
+    /// At the destination the car parks itself (<see cref="Parking"/>): in a free spot of a parking lot nearby, which
+    /// the road AI heads for from the start, or at the kerb when there is none.
     /// </summary>
     internal static class Autopilot
     {
@@ -24,9 +27,16 @@ namespace Yesla.Driving
         internal static string LastReason { get; private set; } = string.Empty;
 
         private static LandVehicle _car;
+        private static ParkTarget _park;
+
+        /// <summary>Driving towards the destination, or parking there.</summary>
+        internal static bool Active => State == DriveState.Driving || State == DriveState.Parking;
+
+        /// <summary>The spot the car parks in or drives to, for the visualisation; null without one.</summary>
+        internal static ParkTarget PlannedSpot => Parking.Current ?? (State == DriveState.Driving ? _park : null);
 
         /// <summary>The car Assisted Driving is steering right now, or null.</summary>
-        internal static LandVehicle DrivenCar => State == DriveState.Driving ? _car : null;
+        internal static LandVehicle DrivenCar => Active ? _car : null;
 
         /// <summary>Input above this on any axis counts as the driver taking over.</summary>
         private const float TakeoverThreshold = 0.5f;
@@ -38,9 +48,15 @@ namespace Yesla.Driving
         {
             Destination = position;
             DestinationLabel = string.IsNullOrEmpty(label) ? position.ToString("F0") : label;
-            if (State == DriveState.Driving && _car != null)
+            if (Active && _car != null)
             {
                 Core.Log.Msg("[Autopilot] new destination while driving, rerouting to " + DestinationLabel);
+                if (State == DriveState.Parking)
+                {
+                    Parking.Cancel("new destination");
+                    PathFollower.Attach(_car, "Assisted Driving", DriveProfile.Current, Disengage);
+                    SetState(DriveState.Driving, "rerouting to " + DestinationLabel);
+                }
                 Navigate(_car);
                 return;
             }
@@ -49,7 +65,7 @@ namespace Yesla.Driving
 
         internal static void ClearDestination()
         {
-            if (State == DriveState.Driving) Disengage("destination cleared");
+            if (Active) Disengage("destination cleared");
             Destination = null;
             DestinationLabel = string.Empty;
             SetState(DriveState.Off, "destination cleared");
@@ -84,6 +100,7 @@ namespace Yesla.Driving
 
             // State first: a route that cannot be found reports Failed synchronously from inside Navigate.
             _car = car;
+            Parking.Forget();
             PathFollower.Attach(car, "Assisted Driving", DriveProfile.Current, Disengage);
             SetState(DriveState.Driving, "engaged towards " + DestinationLabel);
             Navigate(car);
@@ -91,12 +108,16 @@ namespace Yesla.Driving
             return State == DriveState.Driving;
         }
 
-        private static void Navigate(LandVehicle car)
+        private static void Navigate(LandVehicle car, ParkTarget park = null)
         {
+            string none = string.Empty;
+            _park = park ?? Parking.Find(car, Destination.Value, out none);
+            if (_park == null) Core.Log.Msg("[Autopilot] no parking spot at " + DestinationLabel + " (" + none + ") - will pull over at the kerb.");
+            Vector3 target = _park != null ? _park.Entry : Destination.Value;
             // The car is wherever the player parked it; vanilla's default would teleport it onto the road graph.
             var settings = new NavigationSettings { ensureProximityToGraph = false, endAtRoad = false };
             VehicleAgent.NavigationCallback callback = (Action<VehicleAgent.ENavigationResult>)OnNavigationResult;
-            car.Agent.Navigate(Destination.Value, settings, callback);
+            car.Agent.Navigate(target, settings, callback);
         }
 
         private static void OnNavigationResult(VehicleAgent.ENavigationResult result)
@@ -106,8 +127,7 @@ namespace Yesla.Driving
             switch (result)
             {
                 case VehicleAgent.ENavigationResult.Complete:
-                    Release();
-                    SetState(DriveState.Arrived, "arrived at " + DestinationLabel, DriveState.Driving);
+                    StartParking();
                     break;
                 case VehicleAgent.ENavigationResult.Failed:
                     Release();
@@ -116,11 +136,68 @@ namespace Yesla.Driving
             }
         }
 
+        /// <summary>The road AI is done, or the spot is in reach; the parking manoeuvre takes the car the last metres.</summary>
+        private static void StartParking(string why = null)
+        {
+            LandVehicle car = _car;
+            StopAgent(car);
+            ParkTarget target = _park;
+            if (target != null && !target.Kerb && (!Parking.Free(car, target, out string what) || (target.Spot.OccupantVehicle != null && target.Spot.OccupantVehicle.Pointer != car.Pointer)))
+            {
+                Core.Log.Msg("[Autopilot] " + target.Label + " was taken on the way" + (what.Length > 0 ? " (" + what + ")" : "") + " - looking again.");
+                target = Parking.Find(car, Destination.Value, out _);
+            }
+            target ??= Parking.Kerb(car);
+            if (target.Kerb && !Parking.Free(car, target, out string kerbWhat))
+            {
+                Release();
+                SetState(DriveState.Arrived, "arrived at " + DestinationLabel + ", the kerb is taken (" + kerbWhat + ")", DriveState.Driving);
+                return;
+            }
+            SetState(DriveState.Parking, (why ?? "arrived at " + DestinationLabel) + ", parking in " + target.Label, DriveState.Driving);
+            _park = target;
+            Parking.Start(car, target, OnParked);
+        }
+
+        private static void OnParked(bool ok, string why)
+        {
+            if (State != DriveState.Parking) return;
+            ParkTarget next = Parking.TakeNext();
+            if (next != null && _car != null)
+            {
+                // The spot was blocked; the road AI takes the car to the next one, which parks as usual.
+                PathFollower.Attach(_car, "Assisted Driving", DriveProfile.Current, Disengage);
+                SetState(DriveState.Driving, why, DriveState.Parking);
+                Navigate(_car, next);
+                return;
+            }
+            string where = _park != null && !_park.Kerb ? "a parking spot" : "the kerb";
+            Release();
+            SetState(DriveState.Arrived, ok ? "parked at " + where + " at " + DestinationLabel : "arrived at " + DestinationLabel + ", could not park: " + why, DriveState.Parking);
+        }
+
         internal static void Disengage(string reason)
         {
-            if (State != DriveState.Driving) return;
+            if (!Active) return;
+            DriveState was = State;
+            Parking.Cancel(reason);
             Release();
-            SetState(DriveState.Aborted, reason, DriveState.Driving);
+            SetState(DriveState.Aborted, reason, was);
+        }
+
+        /// <summary>Stops the road AI and the path follower but keeps the car under Assisted Driving.</summary>
+        private static void StopAgent(LandVehicle car)
+        {
+            PathFollower.Detach(car);
+            if (car == null || car.Agent == null) return;
+            try
+            {
+                // Parking first, so the Stopped callback that StopNavigating fires is ignored.
+                State = DriveState.Parking;
+                car.Agent.StopNavigating();
+                car.Agent.Flags.ResetFlags();
+            }
+            catch (Exception e) { Core.Log.Error("[Autopilot] could not stop the road AI for parking: " + e.Message); }
         }
 
         /// <summary>Stops the agent and hands the controls back. Safe when the car is already gone.</summary>
@@ -147,7 +224,10 @@ namespace Yesla.Driving
         /// <summary>Called from OnUpdate: engage key and leaving the seat.</summary>
         internal static void Tick()
         {
-            if (State == DriveState.Driving)
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Autopilot.Tick");
+#endif
+            if (Active)
             {
                 if (_car == null) { Disengage("the car is gone"); return; }
                 LandVehicle current = CurrentCar();
@@ -158,7 +238,7 @@ namespace Yesla.Driving
 
             if (GameInput.IsTyping || PhoneOpen()) return;
             if (!Input.GetKeyDown(Preferences.EngageKey)) return;
-            if (State == DriveState.Driving) { Disengage("engage key pressed"); return; }
+            if (Active) { Disengage("engage key pressed"); return; }
             if (!Engage(out string why)) Core.Log.Msg("[Autopilot] cannot engage: " + why);
         }
 
@@ -169,7 +249,10 @@ namespace Yesla.Driving
         /// </summary>
         internal static void LateTick()
         {
-            if (State != DriveState.Driving || _car == null) return;
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Autopilot.LateTick");
+#endif
+            if (!Active || _car == null) return;
             if (PhoneOpen())
             {
                 if (!_phoneWasOpen) Core.Log.Msg("[Autopilot] phone open - driving keys do not take over until it closes.");
@@ -180,10 +263,17 @@ namespace Yesla.Driving
             Vector2 motion = GameInput.MotionAxis;
             if (Mathf.Abs(motion.x) > TakeoverThreshold) { Disengage("steering input"); return; }
             if (Mathf.Abs(GameInput.VehicleDriveAxis) > TakeoverThreshold) { Disengage("throttle or brake input"); return; }
-            if (GameInput.GetButton(GameInput.ButtonCode.VehicleHandbrake)) Disengage("handbrake");
+            if (GameInput.GetButton(GameInput.ButtonCode.VehicleHandbrake)) { Disengage("handbrake"); return; }
+
+            if (State == DriveState.Driving && _park != null && !_park.Kerb && Time.time >= _nextReach)
+            {
+                _nextReach = Time.time + 0.25f;
+                if (Parking.InReach(_car, _park, out string reach)) StartParking("in reach of " + _park.Label + ", " + reach);
+            }
         }
 
         private static bool _phoneWasOpen;
+        private static float _nextReach;
 
         private static bool PhoneOpen()
         {
@@ -212,8 +302,9 @@ namespace Yesla.Driving
 
         internal static void Reset()
         {
-            if (State == DriveState.Driving) Release();
+            if (Active) Release();
             State = DriveState.Off;
+            _park = null;
             Destination = null;
             DestinationLabel = string.Empty;
             LastReason = string.Empty;

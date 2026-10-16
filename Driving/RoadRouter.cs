@@ -59,6 +59,9 @@ namespace Yesla.Driving
 
         private static bool Prefix(Seeker __instance, Vector3 start, Vector3 end, OnPathDelegate callback, ref Path __result)
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.RoadRouter.Search");
+#endif
             if (_disabled) return true;
             try
             {

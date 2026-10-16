@@ -23,6 +23,9 @@ namespace Yesla.Driving
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.DestinationMarker.Tick");
+#endif
             bool want = Autopilot.Destination.HasValue && Autopilot.State != DriveState.Arrived && Autopilot.State != DriveState.Off;
             if (!want) { Hide(); return; }
 

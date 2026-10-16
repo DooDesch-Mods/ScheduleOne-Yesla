@@ -1,13 +1,20 @@
-/* Yesla. A dark map-first screen: the map takes the room, a narrow side column carries the car, the destination
-   and the place list. Landscape only, 733 x 400. */
+/* Yesla. The car on the left (its picture in its own paint, state, remote controls), tabs on the right: Drive
+   (map, search, destination, profile), Paint and Plate. The map has a full-screen mode of its own.
+   Landscape only, 733 x 400.
+
+   No CSS borders: every edge is a fill, a gap or an outer shadow. A ring that has to be there (a selected swatch,
+   the plate's frame) is an element with padding. */
 
 :root {
-  --bg: #0f1012;
-  --panel: #18191c;
-  --raised: #202226;
-  --line: #2a2c31;
+  --bg: #0b0c0e;
+  --panel: #15161a;
+  --raised: #24262b;
+  --raised-hi: #2e3036;
+  --track: #17181c;
   --text: #f1f1f2;
+  --soft: #c9ccd1;
   --muted: #8d9096;
+  --dim: #6c7076;
   --accent: #3e6ae1;
   --accent-hi: #5a82ee;
   --accent-lo: #3157bd;
@@ -24,27 +31,78 @@ body {
 }
 
 .app { height: 100%; flex-direction: row; background: var(--bg); }
+.hidden { display: none; }
 
-/* ---- map ---------------------------------------------------------------------------------------------------- */
+/* ---- the car ------------------------------------------------------------------------------------------------ */
 
-.viewport { position: relative; flex: 1; min-width: 0; overflow: hidden; touch-action: none; background: #1b1d21; }
+.car {
+  width: 276px; flex: none; padding: 16px 16px 14px;
+  background: linear-gradient(180deg, #1d1f23, #0b0c0e);
+}
+.name { font-size: 19px; font-weight: 700; }
+.statusrow { flex-direction: row; align-items: center; gap: 6px; margin-top: 3px; }
+.sdot { width: 6px; height: 6px; border-radius: 3px; background: #5d6168; flex: none; }
+.sdot.live { background: var(--ok); }
+.sdot.warn { background: var(--warn); }
+.status { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status.live { color: var(--ok); }
+.status.warn { color: var(--warn); }
 
-/* 2048 map units at 1250.8 css px for zoom 1; every size below is stated because the renderer cannot read a
+.stage { height: 132px; margin-top: 2px; align-items: center; justify-content: center; }
+.pic { width: 236px; height: 122px; }
+
+.stats { flex-direction: row; margin-top: 2px; }
+.stat { flex: 1; align-items: center; gap: 1px; }
+.stat .v { font-size: 15px; font-weight: 700; white-space: nowrap; }
+.stat .k { font-size: 10px; color: var(--muted); }
+
+/* Remote controls: a round button and its label under it. */
+.ctrls { flex-direction: row; justify-content: space-between; margin-top: auto; padding: 0 4px; }
+.ctl { align-items: center; gap: 5px; width: 52px; }
+.tile {
+  width: 44px; height: 44px; border-radius: 22px; background: var(--raised);
+  align-items: center; justify-content: center; box-shadow: 0 2px 6px #00000080;
+}
+.tile:hover { background: var(--raised-hi); }
+.tile:active { background: #1c1d21; }
+.tile:disabled { background: #17181b; }
+.tile.on { background: var(--accent); }
+.tile.on:hover { background: var(--accent-hi); }
+.ico { width: 20px; height: 20px; }
+.tl { font-size: 10px; color: var(--soft); white-space: nowrap; }
+.tl.off { color: #4d5056; }
+
+/* ---- tabs --------------------------------------------------------------------------------------------------- */
+
+.side { flex: 1; min-width: 0; padding: 0 12px 12px; gap: 10px; }
+.tabs { flex-direction: row; gap: 4px; padding-top: 4px; flex: none; }
+.tab { padding: 9px 10px 0; gap: 7px; align-items: center; background: transparent; }
+.tab .tt { font-size: 13px; color: var(--muted); }
+.tab.on .tt { color: var(--text); }
+.tab .bar { width: 18px; height: 3px; border-radius: 2px; background: transparent; }
+.tab.on .bar { background: var(--accent); }
+
+.pane { flex: 1; min-height: 0; gap: 10px; }
+.pane.pad { padding: 4px 4px 0; }
+.h { font-size: 11px; color: var(--muted); }
+.hint { font-size: 11px; color: var(--dim); }
+
+/* ---- drive: the map ----------------------------------------------------------------------------------------- */
+
+.viewport { flex: 1; min-height: 0; overflow: hidden; border-radius: 12px; background: #1b1d21; touch-action: none; }
+
+/* Full screen: the map leaves its pane and covers the whole app. */
+.app.full .viewport { position: fixed; left: 0; top: 0; right: 0; bottom: 0; border-radius: 0; }
+
+/* 2048 map units at 1250.8 css px for zoom 1; every size is stated because the renderer cannot read a
    picture's own size. */
 .world { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; transform-origin: 0 0; }
-.map { display: block; width: 1250.8px; height: 1250.8px; }
+.map { width: 1250.8px; height: 1250.8px; }
 .nomap { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; background: #1b1d21; display: none; }
 .nomap.on { display: flex; }
 .layer { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; }
 
-.spot {
-  position: absolute;
-  width: 6px;
-  height: 6px;
-  border-radius: 3px;
-  background: #c9ccd1;
-  border: 1px solid #0f1012;
-}
+.spot { position: absolute; width: 7px; height: 7px; border-radius: 4px; background: #c9ccd1; box-shadow: 0 0 2px #000000; }
 .spot.quest { background: #f2c94c; }
 .spot.property { background: #4a9cf3; }
 .spot.customer { background: #d38be8; }
@@ -53,107 +111,38 @@ body {
 .spot.stash { background: #c4544f; }
 .spot.vehicle { background: #7d8590; }
 
-.me { position: absolute; width: 22px; height: 22px; border-radius: 11px; background: #4ea7ff33; }
-.me .dot {
-  position: absolute; left: 7px; top: 7px; width: 8px; height: 8px; border-radius: 4px;
-  background: #4ea7ff; border: 1px solid #ffffff;
-}
+.me { position: absolute; width: 22px; height: 22px; border-radius: 11px; background: #4ea7ff33; align-items: center; justify-content: center; }
+.me .ring { width: 10px; height: 10px; border-radius: 5px; background: #ffffff; align-items: center; justify-content: center; }
+.me .dot { width: 6px; height: 6px; border-radius: 3px; background: #4ea7ff; }
 
 /* The car seen from above, nose up before rotation. */
-.car {
-  position: absolute; width: 9px; height: 16px; border-radius: 3px;
-  background: #ffffff; border: 1px solid #0f1012; align-items: center;
-}
-.car .nose { width: 5px; height: 3px; margin-top: 2px; border-radius: 1px; background: #3e6ae1; }
+.mcar { position: absolute; width: 9px; height: 16px; border-radius: 3px; background: #ffffff; box-shadow: 0 0 3px #000000; align-items: center; }
+.mcar .nose { width: 5px; height: 3px; margin-top: 2px; border-radius: 1px; background: #3e6ae1; }
 
 .dest {
   position: absolute; width: 16px; height: 16px; border-radius: 8px;
-  background: var(--accent); border: 2px solid #ffffff; align-items: center; justify-content: center;
+  background: #ffffff; align-items: center; justify-content: center; box-shadow: 0 1px 4px #000000;
 }
-.dest .core { width: 4px; height: 4px; border-radius: 2px; background: #ffffff; }
+.dest .core { width: 10px; height: 10px; border-radius: 5px; background: var(--accent); }
+.pending { position: absolute; width: 16px; height: 16px; border-radius: 8px; background: #ffffffcc; align-items: center; justify-content: center; }
+.pending .core { width: 10px; height: 10px; border-radius: 5px; background: #3e6ae188; }
 
-.pending {
-  position: absolute; width: 16px; height: 16px; border-radius: 8px;
-  border: 2px solid #ffffff; background: #3e6ae155;
+/* Search, on the map. Results drop down under the field. */
+.find { position: absolute; left: 8px; top: 8px; right: 84px; gap: 4px; }
+.app.full .find { right: auto; width: 280px; left: 12px; top: 12px; }
+.field {
+  flex-direction: row; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 10px;
+  background: #15161af0; box-shadow: 0 2px 8px #00000099;
 }
-
-.hidden { display: none; }
-
-.tag {
-  position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 5px 8px; border-radius: 6px;
-  background: #0f1012dd; color: var(--text); font-size: 11px; text-align: center; display: none;
+.ico-s { width: 14px; height: 14px; flex: none; }
+.search { flex: 1; min-width: 0; height: 28px; font-size: 12px; color: var(--text); background: transparent; border: 0; padding: 0; }
+.results {
+  max-height: 210px; overflow-y: auto; min-height: 0; padding: 4px; gap: 1px; border-radius: 10px;
+  background: #15161af5; box-shadow: 0 3px 12px #000000aa;
 }
-.tag.on { display: flex; }
-
-.locate {
-  position: absolute; right: 8px; top: 8px; height: 24px; padding: 0 10px; border-radius: 6px;
-  background: #0f1012dd; border: 1px solid var(--line); color: var(--text); font-size: 11px;
-  align-items: center; justify-content: center;
-}
-.locate:hover { background: #202226; }
-
-/* ---- side column --------------------------------------------------------------------------------------------- */
-
-.side { width: 262px; flex: none; padding: 10px; gap: 8px; background: var(--panel); border-left: 1px solid var(--line); }
-
-.head { gap: 2px; }
-.title { font-size: 16px; font-weight: 700; }
-.sub { font-size: 11px; color: var(--muted); }
-.sub.live { color: var(--ok); }
-.sub.warn { color: var(--warn); }
-
-.controls { flex-direction: row; gap: 5px; }
-.ctl {
-  flex: 1; height: 26px; padding: 0 4px; border-radius: 6px; background: #2c2f35; color: var(--text);
-  font-size: 10px; font-weight: 600; align-items: center; justify-content: center;
-}
-.ctl:hover { background: #363a41; }
-.ctl:active { background: #25282d; }
-.ctl:disabled { background: #222428; color: #5d6066; }
-.ctl.on { background: var(--accent); }
-.ctl.on:hover { background: var(--accent-hi); }
-.ctl.on:active { background: var(--accent-lo); }
-
-/* Drive profile: one segmented row, the active one filled. */
-.profiles { flex-direction: row; gap: 2px; padding: 2px; border-radius: 7px; background: var(--bg); border: 1px solid var(--line); }
-.prof {
-  flex: 1; height: 22px; border-radius: 5px; background: var(--bg); color: var(--muted);
-  font-size: 10px; font-weight: 600; align-items: center; justify-content: center;
-}
-.prof:hover { background: var(--raised); color: var(--text); }
-.prof.on { background: #2c2f35; color: var(--text); }
-.prof.on.mad { background: var(--warn); color: #ffffff; }
-
-.card { padding: 9px; gap: 3px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); }
-.card-label { font-size: 10px; color: var(--muted); }
-.card-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-line { font-size: 11px; color: var(--muted); }
-.card-line.warn { color: var(--warn); }
-.card-line.live { color: var(--ok); }
-
-.actions { flex-direction: row; gap: 6px; margin-top: 6px; }
-.btn {
-  height: 26px; padding: 0 10px; border-radius: 6px; background: #2c2f35; color: var(--text);
-  font-size: 11px; font-weight: 600; align-items: center; justify-content: center;
-}
-.btn:hover { background: #363a41; }
-.btn:active { background: #25282d; }
-.btn:disabled { background: #222428; color: #5d6066; }
-.btn.primary { flex: 1; background: var(--accent); }
-.btn.primary:hover { background: var(--accent-hi); }
-.btn.primary:active { background: var(--accent-lo); }
-.btn.primary:disabled { background: #283456; color: #7f8aa8; }
-
-.search {
-  height: 26px; padding: 0 9px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line);
-  color: var(--text); font-size: 11px; align-items: center;
-}
-
-.list { flex: 1; min-height: 0; overflow-y: auto; gap: 2px; }
-
-.row { flex-direction: row; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 6px; }
+.app.full .results { max-height: 300px; }
+.row { flex-direction: row; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 7px; }
 .row:hover { background: var(--raised); }
-.row.on { background: #263052; }
 .row .swatch { width: 7px; height: 7px; border-radius: 4px; background: #c9ccd1; flex: none; }
 .row .swatch.quest { background: #f2c94c; }
 .row .swatch.property { background: #4a9cf3; }
@@ -163,6 +152,87 @@ body {
 .row .swatch.stash { background: #c4544f; }
 .row .swatch.vehicle { background: #7d8590; }
 .row .text { flex: 1; min-width: 0; gap: 1px; }
-.row .name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.row .meta { font-size: 10px; color: var(--muted); }
-.empty { padding: 8px 6px; font-size: 11px; color: var(--muted); }
+.row .rn { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .rm { font-size: 10px; color: var(--muted); }
+.empty { padding: 6px; font-size: 11px; color: var(--muted); }
+
+.mapbtns { position: absolute; right: 8px; top: 8px; flex-direction: row; gap: 6px; }
+.app.full .mapbtns { right: 12px; top: 12px; }
+.mbtn {
+  width: 30px; height: 30px; border-radius: 10px; background: #15161af0; box-shadow: 0 2px 8px #00000099;
+  align-items: center; justify-content: center;
+}
+.mbtn:hover { background: #2a2c31f0; }
+
+/* The destination card, along the bottom of the map. */
+.destcard {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; flex-direction: row; align-items: center; gap: 8px;
+  padding: 8px 8px 8px 12px; border-radius: 12px; background: #15161af5; box-shadow: 0 3px 12px #000000aa;
+}
+.app.full .destcard { left: 12px; right: auto; width: 420px; bottom: 12px; }
+.dt { flex: 1; min-width: 0; gap: 1px; }
+.dn { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dn.quiet { font-size: 12px; font-weight: 400; color: var(--muted); }
+.dl { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl.live { color: var(--ok); }
+.dl.warn { color: var(--warn); }
+
+.tag {
+  position: absolute; left: 8px; right: 8px; bottom: 62px; padding: 6px 10px; border-radius: 10px;
+  background: #0b0c0eee; color: var(--text); font-size: 11px; text-align: center; display: none;
+  box-shadow: 0 2px 8px #00000099;
+}
+.tag.on { display: flex; }
+.app.full .tag { left: 12px; right: auto; width: 420px; bottom: 68px; }
+
+.btn {
+  height: 30px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #ffffff;
+  font-size: 12px; font-weight: 700; align-items: center; justify-content: center; flex: none;
+}
+.btn:hover { background: var(--accent-hi); }
+.btn:active { background: var(--accent-lo); }
+.btn:disabled { background: #283456; color: #7f8aa8; }
+.btn.ghost { background: #2a2c31; color: #d6d8dc; font-weight: 400; }
+.btn.ghost:hover { background: #34363c; }
+.btn.ghost:disabled { background: #1b1c20; color: #55585e; }
+
+/* Drive profile and parking: two segmented rows, labels centred. */
+.segs { flex-direction: row; gap: 8px; flex: none; }
+.seg { flex: 1; flex-direction: row; gap: 2px; padding: 3px; border-radius: 10px; background: var(--track); }
+.sg { flex: 1; padding: 5px 0; border-radius: 8px; background: transparent; align-items: center; justify-content: center; gap: 1px; }
+.sg:hover { background: #22242a; }
+.sg .sl { font-size: 12px; color: #a7aab0; text-align: center; }
+.sg .ss { font-size: 9.5px; color: var(--dim); text-align: center; }
+.sg.on { background: var(--raised-hi); box-shadow: 0 1px 4px #00000099; }
+.sg.on .sl { color: #ffffff; }
+.sg.on .ss { color: #a7aab0; }
+.sg.on.mad { background: var(--warn); }
+.sg.on.mad .sl { color: #ffffff; }
+.sg.on.mad .ss { color: #ffd9da; }
+
+/* ---- paint -------------------------------------------------------------------------------------------------- */
+
+.paintname { font-size: 15px; font-weight: 700; }
+.swatches { flex-direction: row; flex-wrap: wrap; gap: 8px; }
+/* The ring is the button, the colour a disc inside it. */
+.sw { width: 38px; height: 38px; border-radius: 19px; padding: 4px; background: transparent; }
+.sw:hover { background: #4a4d55; }
+.sw.on { background: #ffffff; }
+.sw:disabled { background: transparent; }
+.sw .disc { width: 30px; height: 30px; border-radius: 15px; box-shadow: 0 1px 3px #000000; }
+
+/* ---- plate -------------------------------------------------------------------------------------------------- */
+
+/* White rim, dark frame, white field: three fills instead of a bordered box. */
+.plate { align-self: flex-start; padding: 2px; border-radius: 8px; background: #f4f4f2; box-shadow: 0 2px 8px #00000099; }
+.plate-f { padding: 2px; border-radius: 6px; background: #15161a; }
+.plate-t {
+  padding: 5px 18px; border-radius: 4px; background: #f4f4f2;
+  color: #15161a; font-size: 24px; font-weight: 700; letter-spacing: 3px; white-space: nowrap;
+}
+.plateedit { flex-direction: row; align-items: center; gap: 8px; }
+.pfield {
+  flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; background: var(--raised);
+  border: 0; color: var(--text); font-size: 14px; letter-spacing: 2px;
+}
+.pfield:focus { background: var(--raised-hi); }

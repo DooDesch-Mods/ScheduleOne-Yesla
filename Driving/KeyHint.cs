@@ -31,6 +31,9 @@ namespace Yesla.Driving
 
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.KeyHint.Tick");
+#endif
             LandVehicle car = Autopilot.CurrentCar();
             bool inYesla = car != null && Phone.YeslaApp.IsYesla(car);
             // Assisted Driving answers only its owner, so only the owner at the wheel is shown the key.

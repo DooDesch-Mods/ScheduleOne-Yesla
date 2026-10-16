@@ -230,6 +230,9 @@ namespace Yesla.Driving
         /// <summary>Host, from OnUpdate: someone got in, the car vanished, or the summon took too long.</summary>
         internal static void Tick()
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.Summon.Tick");
+#endif
             if (!YeslaNet.IsHost) return;
             ClearSettled();
             if (Jobs.Count == 0) return;

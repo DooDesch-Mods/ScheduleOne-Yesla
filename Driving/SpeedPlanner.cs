@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.Vehicles;
 using Il2CppScheduleOne.Vehicles.AI;
 
@@ -28,13 +29,27 @@ namespace Yesla.Driving
         /// <summary>Distance before the path end at which vanilla reports arrival.</summary>
         private const float ArriveWithin = 3f;
         private const float ProbeHeight = 1.0f;
-        private const float ProbeRadius = 0.8f;
+        /// <summary>Half the car's width plus a hand's breadth: a lamp post at the lane edge is in the way.</summary>
+        private const float ProbeRadius = 0.95f;
+        /// <summary>The swept line starts at the car and joins the path over this many metres, so a car that is not
+        /// on the path yet (pulling out from the kerb) sweeps where it will really go.</summary>
+        private const float JoinMetres = 8f;
+        /// <summary>Cross traffic: another car predicted this close to a point of the path when we get there.</summary>
+        private const float CrossGap = 2.4f;
+        private const float CrossSeconds = 3f;
+        private const float CrossRange = 50f;
         /// <summary>Gap kept to a stop line.</summary>
         private const float StopLineGap = 1.5f;
+        /// <summary>Gap between the front bumper and a pedestrian crossing the car waits before.</summary>
+        private const float CrosswalkGap = 0.6f;
+        /// <summary>Below this speed in m/s the thing ahead counts as standing, and the car waits for it.</summary>
+        private const float StandingSpeed = 1f;
 
         internal const float MinKmh = 8f;
 
         private static readonly List<Vector3> Samples = new List<Vector3>(128);
+        /// <summary>Path distances where the car's path enters (x) and leaves (y) a pedestrian crossing.</summary>
+        private static readonly List<Vector2> Walks = new List<Vector2>();
 
         internal struct Plan
         {
@@ -45,6 +60,9 @@ namespace Yesla.Driving
         internal static Plan Run(LandVehicle car, VehicleAgent agent, Il2CppSystem.Collections.Generic.List<Vector3> pts,
                                  int seg, float lerp, DriveProfile p)
         {
+#if SNITCH
+            using var __perf = Snitch.Api.Profiler.Sample("Yesla.SpeedPlanner.Run");
+#endif
             float v = Mathf.Abs(car.Speed_Kmh) / 3.6f;
             float a = p.BrakeDecel;
             float reaction = v * ReactionSeconds;
@@ -91,10 +109,23 @@ namespace Yesla.Driving
 
             // Something in the lane.
             float scan = v * v / (2f * a) + reaction + p.StopGap + 12f;
+            FindWalks(scan + 10f);
+            float halfLength = car.BoundingBoxDimensions.z * 0.5f;
             if (Obstacle(car, p, scan, out float at, out float gap, out float otherSpeed, out string what))
             {
-                float allowed = Reach(otherSpeed, at - gap - reaction, a);
+                float stop = at - gap;
+                if (otherSpeed < StandingSpeed && OffWalk(ref stop, halfLength, v, a, reaction)) what += ", waiting before the crossing";
+                float allowed = Reach(otherSpeed, stop - reaction, a);
                 if (allowed < best) { best = allowed; why = what + " in " + at.ToString("F0") + " m"; }
+            }
+
+            // A car that will cross the path.
+            if (Crossing(car, v, scan, out float cAt, out string cWhat))
+            {
+                float stop = cAt - p.StopGap;
+                if (OffWalk(ref stop, halfLength, v, a, reaction)) cWhat += ", waiting before the crossing";
+                float allowed = Reach(0f, stop - reaction, a);
+                if (allowed < best) { best = allowed; why = cWhat + " in " + cAt.ToString("F0") + " m"; }
             }
 
             return new Plan { Kmh = Mathf.Max(MinKmh, best * 3.6f), Why = why };
@@ -149,11 +180,13 @@ namespace Yesla.Driving
             Transform self = car.transform;
             Transform seated = car.HumanoidColliderContainer != null ? car.HumanoidColliderContainer.transform : null;
             Vector3 fwd = self.forward;
+            Vector3 off = self.position - Samples[0];
+            off.y = 0f;
 
             for (int k = 0; k + 2 < Samples.Count && k * Step < range; k += 2)
             {
-                Vector3 from = Samples[k] + Vector3.up * ProbeHeight;
-                Vector3 to = Samples[k + 2] + Vector3.up * ProbeHeight;
+                Vector3 from = Samples[k] + Join(off, k) + Vector3.up * ProbeHeight;
+                Vector3 to = Samples[k + 2] + Join(off, k + 2) + Vector3.up * ProbeHeight;
                 Vector3 dir = to - from;
                 float len = dir.magnitude;
                 if (len < 0.01f) continue;
@@ -195,6 +228,88 @@ namespace Yesla.Driving
                 if (at < float.MaxValue) return true;
             }
             return false;
+        }
+
+        /// <summary>Where the path ahead runs over a pedestrian crossing, within <paramref name="range"/> metres.</summary>
+        private static void FindWalks(float range)
+        {
+            Walks.Clear();
+            List<Crosswalks.Walk> all = Crosswalks.All;
+            if (all.Count == 0 || Samples.Count < 2) return;
+            Vector3 here = Samples[0];
+            for (int w = 0; w < all.Count; w++)
+            {
+                Crosswalks.Walk walk = all[w];
+                Vector3 d = walk.Centre - here; d.y = 0f;
+                if (d.magnitude > range + walk.HalfAcross) continue;
+                float enter = -1f, leave = -1f;
+                for (int k = 0; k + 1 < Samples.Count && k * Step < range; k++)
+                {
+                    if (!Crosswalks.Clip(walk, Samples[k], Samples[k + 1], out float e, out float l)) continue;
+                    if (enter < 0f) enter = (k + e) * Step;
+                    leave = (k + l) * Step;
+                }
+                if (enter >= 0f) Walks.Add(new Vector2(enter, leave));
+            }
+        }
+
+        /// <summary>
+        /// Pulls a stop back to before a pedestrian crossing the car would otherwise stand on with any part of it.
+        /// Only when the car can still stop there without braking harder than planned; a car already on the
+        /// crossing keeps its stop. <paramref name="stop"/> is the distance the car's centre still travels.
+        /// </summary>
+        private static bool OffWalk(ref float stop, float halfLength, float v, float a, float reaction)
+        {
+            for (int i = 0; i < Walks.Count; i++)
+            {
+                Vector2 w = Walks[i];
+                if (stop + halfLength <= w.x - CrosswalkGap || stop - halfLength >= w.y) continue;
+                float before = w.x - CrosswalkGap - halfLength;
+                if (before < v * v / (2f * a) + reaction) return false;
+                stop = before;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>The car's offset from the path, fading out over <see cref="JoinMetres"/>.</summary>
+        private static Vector3 Join(Vector3 off, int k) => off * Mathf.Max(0f, 1f - k * Step / JoinMetres);
+
+        /// <summary>
+        /// The nearest point of the path that another moving car is predicted to reach about when this one does,
+        /// assuming both keep their speed. Catches cross traffic at a junction and oncoming cars across a left turn,
+        /// which the sweep only sees once they are already in the lane. Cars going the same way are left to the sweep.
+        /// </summary>
+        private static bool Crossing(LandVehicle car, float v, float range, out float at, out string what)
+        {
+            at = float.MaxValue; what = string.Empty;
+            var all = NetworkSingleton<VehicleManager>.InstanceExists ? NetworkSingleton<VehicleManager>.Instance.AllVehicles : null;
+            if (all == null || Samples.Count < 3) return false;
+            Vector3 self = car.transform.position;
+            Vector3 fwd = car.transform.forward; fwd.y = 0f; fwd.Normalize();
+            float pace = Mathf.Max(v, 3f);
+            float gap2 = CrossGap * CrossGap;
+            for (int i = 0; i < all.Count; i++)
+            {
+                LandVehicle other = all[i];
+                if (other == null || other.Pointer == car.Pointer || other.Rb == null) continue;
+                Vector3 pos = other.transform.position;
+                if ((pos - self).sqrMagnitude > CrossRange * CrossRange) continue;
+                Vector3 vel = other.Rb.velocity; vel.y = 0f;
+                float speed = vel.magnitude;
+                if (speed < 2f || Vector3.Dot(vel / speed, fwd) > 0.7f) continue;
+                for (int k = 2; k < Samples.Count && k * Step < range; k += 2)
+                {
+                    float t = k * Step / pace;
+                    if (t > CrossSeconds) break;
+                    Vector3 d = pos + vel * t - Samples[k];
+                    d.y = 0f;
+                    if (d.sqrMagnitude > gap2) continue;
+                    if (k * Step < at) { at = k * Step; what = "crossing " + other.VehicleName; }
+                    break;
+                }
+            }
+            return at < float.MaxValue;
         }
 
         /// <summary>The speed limit at <paramref name="at"/> in km/h: the speed zone's, or the unmarked-road speed.</summary>

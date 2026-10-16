@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Snitch profiler, DEBUG only (Snitch/Probe.cs). Release contains zero Snitch types. -->
+  <Import Project="$(MSBuildThisFileDirectory)../Workspace/build/Snitch.props" Condition="Exists('$(MSBuildThisFileDirectory)../Workspace/build/Snitch.props')" />
+
   <!-- Shared release hardening: strip Release debug info + assembly identity, cuts AV false positives (see Workspace/build/Hardening.props). -->
   <Import Project="$(MSBuildThisFileDirectory)../Workspace/build/Hardening.props" Condition="Exists('$(MSBuildThisFileDirectory)../Workspace/build/Hardening.props')" />
   <Import Project="$(MSBuildThisFileDirectory)Workspace/build/Hardening.props" Condition="Exists('$(MSBuildThisFileDirectory)Workspace/build/Hardening.props')" />
@@ -204,6 +207,10 @@
     </EmbeddedResource>
     <EmbeddedResource Include="Assets/compass.png">
       <LogicalName>Yesla.Assets.compass.png</LogicalName>
+    </EmbeddedResource>
+    <!-- The app's car picture: the model rendered with white and with black paint (Phone/CarPicture.cs). -->
+    <EmbeddedResource Include="Assets/car_w.png;Assets/car_b.png">
+      <LogicalName>Yesla.Assets.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
 
