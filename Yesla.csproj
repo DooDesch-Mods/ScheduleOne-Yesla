@@ -209,6 +209,10 @@
     <EmbeddedResource Include="Assets/yesla/*">
       <LogicalName>Yesla.Assets.yesla.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+    <!-- Horn, lock chirp, chimes and pedestrian warning: 16-bit mono PCM, read by Vehicle/Clips.cs. -->
+    <EmbeddedResource Include="Assets/sounds/*.pcm">
+      <LogicalName>Yesla.Assets.sounds.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
     <EmbeddedResource Include="Assets/compass.png">
       <LogicalName>Yesla.Assets.compass.png</LogicalName>
     </EmbeddedResource>

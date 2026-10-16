@@ -8,8 +8,8 @@ namespace Yesla.Vehicle
     /// <summary>
     /// Honk and flash from the phone, to find the car in a crowd.
     ///
-    /// Vanilla cars have no horn, so the sound is synthesised here and played at the car on every peer when the host
-    /// broadcasts it. The flash toggles <c>VehicleLights.HeadlightsOn</c>, a SyncVar that replicates at about 4 Hz,
+    /// Vanilla cars have no horn, so a recorded one (<see cref="Clips"/>) plays at the car on every peer when the host
+    /// broadcasts it, with a synthesised tone as the stand-in if the recording cannot be read. The flash toggles <c>VehicleLights.HeadlightsOn</c>, a SyncVar that replicates at about 4 Hz,
     /// on the host only; each step is held longer than that so remote peers see every one.
     /// </summary>
     internal static class Horn
@@ -26,11 +26,27 @@ namespace Yesla.Vehicle
             if (car == null) { Core.Log.Warning("[Horn] honk for a car that is gone."); return; }
             try
             {
+                AudioClip recorded = Clips.Get("horn");
                 AudioSource source = SourceOn(car);
-                source.PlayOneShot(Clip());
+                source.PlayOneShot(recorded != null ? recorded : Clip(), 0.8f * Clips.Volume());
                 Core.Log.Msg("[Horn] honked " + car.VehicleName + " #" + Fleet.NetId(car) + " at " + car.transform.position.ToString("F0") + ".");
             }
             catch (Exception e) { Core.Log.Error("[Horn] could not play the horn: " + e); }
+        }
+
+        /// <summary>Everyone: one chirp when the car locks, two when it unlocks.</summary>
+        internal static void Chirp(LandVehicle car, bool locked)
+        {
+            if (car == null) { Core.Log.Warning("[Horn] lock chirp for a car that is gone."); return; }
+            if (!Clips.PlayAt(car, "chirp", "YeslaHorn", 0.7f)) return;
+            if (!locked) MelonCoroutines.Start(SecondChirp(car));
+            Core.Log.Msg("[Horn] " + (locked ? "lock" : "unlock") + " chirp on " + car.VehicleName + " #" + Fleet.NetId(car) + ".");
+        }
+
+        private static IEnumerator SecondChirp(LandVehicle car)
+        {
+            yield return new WaitForSeconds(0.22f);
+            if (car != null) Clips.PlayAt(car, "chirp", "YeslaHorn", 0.7f);
         }
 
         /// <summary>Host: flash the headlights twice and leave them as they were.</summary>
@@ -55,22 +71,7 @@ namespace Yesla.Vehicle
             lights.HeadlightsOn = was;
         }
 
-        private static AudioSource SourceOn(LandVehicle car)
-        {
-            Transform t = car.transform.Find("YeslaHorn");
-            if (t != null) return t.GetComponent<AudioSource>();
-            var go = new GameObject("YeslaHorn");
-            go.transform.SetParent(car.transform, false);
-            go.transform.localPosition = new Vector3(0f, 0.6f, 1.8f);
-            var source = go.AddComponent<AudioSource>();
-            source.spatialBlend = 1f;
-            source.minDistance = 6f;
-            source.maxDistance = 120f;
-            source.rolloffMode = AudioRolloffMode.Linear;
-            source.playOnAwake = false;
-            source.volume = 0.8f;
-            return source;
-        }
+        private static AudioSource SourceOn(LandVehicle car) => Clips.On(car, "YeslaHorn", new Vector3(0f, 0.6f, 1.8f), 6f, 120f);
 
         /// <summary>A two-tone car horn: two detuned square-ish tones a minor third apart, 0.55 s with soft edges.</summary>
         private static AudioClip Clip()

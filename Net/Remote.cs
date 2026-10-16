@@ -176,6 +176,10 @@ namespace Yesla.Net
                     if (!int.TryParse(m.Arg(0), out int id)) { Core.Log.Warning("[Remote] unreadable honk " + m + "."); return; }
                     Horn.Play(Fleet.FindById(id));
                     return;
+                case "chirp":
+                    if (!int.TryParse(m.Arg(0), out int cid)) { Core.Log.Warning("[Remote] unreadable chirp " + m + "."); return; }
+                    Horn.Chirp(Fleet.FindById(cid), m.Arg(1) == "1");
+                    return;
                 default:
                     Core.Log.Warning("[Remote] unknown state " + m + " - is every player on the same Yesla version?");
                     return;

@@ -112,7 +112,7 @@ namespace Yesla.Vehicle
             return list;
         }
 
-        private static Il2CppSystem.Collections.Generic.List<LandVehicle> AllVehicles() =>
+        internal static Il2CppSystem.Collections.Generic.List<LandVehicle> AllVehicles() =>
             NetworkSingleton<VehicleManager>.InstanceExists ? NetworkSingleton<VehicleManager>.Instance.AllVehicles : null;
 
         // ---- host --------------------------------------------------------------------------------------------------
@@ -144,8 +144,10 @@ namespace Yesla.Vehicle
             if (!YeslaNet.IsHost) return "only the host changes a car";
             if (!ByGuid.TryGetValue(car.GUID.ToString(), out Rec r)) return "the car has no owner record";
             if (r.Owner != requester) return "not the owner";
+            bool chirp = locked.HasValue && locked.Value != r.Locked;
             if (locked.HasValue) r.Locked = locked.Value;
             if (sentry.HasValue) r.Sentry = sentry.Value;
+            if (chirp) YeslaNet.ToAll("chirp", NetId(car).ToString(System.Globalization.CultureInfo.InvariantCulture), r.Locked ? "1" : "0");
             Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": locked=" + r.Locked + " sentry=" + r.Sentry + " (by " + requester + ").");
             Save();
             Broadcast(force: true);

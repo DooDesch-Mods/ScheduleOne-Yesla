@@ -88,6 +88,7 @@ namespace Yesla.Debugging
                         Say("agentdebug [off]   - vanilla agent debug logging (obstacles, speed multipliers)");
                         Say("fleet              - Yesla owners, lock, sentry and running summons");
                         Say("summon / honk / lock / sentry - the phone controls, on the nearest own Yesla");
+                        Say("sound [play <clip>] - pedestrian warning per Yesla, or play horn/chirp/chime_on/chime_off/pws");
                         Say("sharp [post on|off | aa none|fxaa|smaa | bias <n>] - why the phone looks soft");
                         Say("glass [cast|receive on|off] - the window materials and their shadows");
                         Say("goto [x y z]       - Go to target: the empty car drives to the destination and parks");
@@ -169,6 +170,17 @@ namespace Yesla.Debugging
 
                     case "sentry":
                         Say(Net.Remote.ToggleSentry(Phone.YeslaApp.MyCar()) ?? "sentry: toggle sent");
+                        break;
+
+                    case "sound":
+                        if (parts.Length > 3 && parts[2] == "play") { Say("sound: " + parts[3] + (Vehicle.Clips.PlayCabin(parts[3], 0.6f) ? " played" : " could not play")); break; }
+                        if (parts.Length > 3 && parts[2] == "master" && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float master))
+                        {
+                            // The game's own setter, as the settings screen calls it.
+                            Il2CppScheduleOne.DevUtilities.Singleton<Il2CppScheduleOne.Audio.AudioManager>.Instance.SetMasterVolume(master);
+                        }
+                        Say("sound: game volume (master x effects) " + Vehicle.Clips.Volume().ToString("F2", CultureInfo.InvariantCulture));
+                        Say("sound: " + Vehicle.Pws.Describe());
                         break;
 
                     case "claim":

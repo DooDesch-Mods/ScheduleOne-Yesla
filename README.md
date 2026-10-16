@@ -70,6 +70,10 @@ Car model "Tesla 2018 Model 3" by Ameer Studio, licensed
 [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/), modified for this mod (see
 [LICENSE-MODEL.txt](LICENSE-MODEL.txt)).
 App icons from [Lucide](https://lucide.dev), licensed [ISC](https://lucide.dev/license).
+Sounds from [freesound.org](https://freesound.org), all [CC0](https://creativecommons.org/publicdomain/zero/1.0/), cut for
+this mod: horn by Julien_Matthey ([436589](https://freesound.org/s/436589/)), lock chirp by Filmscore
+([830110](https://freesound.org/s/830110/)), chime by greatsoundstube ([629312](https://freesound.org/s/629312/)),
+pedestrian warning by itinerantmonk108 ([745146](https://freesound.org/s/745146/)).
 
 "Tesla" and "Model 3" are trademarks of Tesla, Inc. This mod is not affiliated with or endorsed by Tesla, Inc.
 

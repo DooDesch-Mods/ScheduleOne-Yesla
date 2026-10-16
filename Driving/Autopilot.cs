@@ -300,6 +300,11 @@ namespace Yesla.Driving
             if (was == next) { Core.Log.Msg("[Autopilot] " + next + " (" + reason + ")"); State = next; return; }
             Core.Log.Msg("[Autopilot] " + was + " -> " + next + " (" + reason + ")");
             State = next;
+            // The centre screen's chimes: rising when Assisted Driving takes over, falling when it hands back.
+            bool wasOn = was == DriveState.Driving || was == DriveState.Parking;
+            bool isOn = next == DriveState.Driving || next == DriveState.Parking;
+            if (wasOn != isOn && Vehicle.Clips.PlayCabin(isOn ? "chime_on" : "chime_off", 0.6f))
+                Core.Log.Msg("[Autopilot] " + (isOn ? "engage" : "disengage") + " chime.");
         }
 
         internal static void Reset()
