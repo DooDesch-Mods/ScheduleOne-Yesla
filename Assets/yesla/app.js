@@ -26,6 +26,7 @@ var appEl = $('app');
 var viewportEl = $('viewport');
 var worldEl = $('world');
 var placesEl = $('places');
+var routeEl = $('route');
 var resultsEl = $('results');
 var tagEl = $('tag');
 
@@ -38,7 +39,6 @@ var searching = false;   // the search field has focus
 var tab = 'drive';
 var full = false;
 var plateDraft = null;   // what the player typed into the plate field, null while untouched
-var skipTap = false;
 var shownPicture = '';
 
 var tx = 0, ty = 0, zoom = ZOOM_START;
@@ -70,23 +70,30 @@ function later(fn, ms) {
 // ---- formatting ------------------------------------------------------------------------------------------------
 
 function metres(m) {
-  if (m >= 1000) return (m / 1000).toFixed(1) + ' km';
-  return Math.round(m / 10) * 10 + ' m';
+  var p = metreParts(m);
+  return p[0] + ' ' + p[1];
+}
+function metreParts(m) {
+  if (m >= 1000) return [(m / 1000).toFixed(1), 'km'];
+  return [String(Math.round(m / 10) * 10), 'm'];
 }
 
 function driveLine() {
   var d = state.drive || {};
   switch (d.state) {
-    case 'Ready': return 'Press ' + d.key + ' in the driver seat.';
+    case 'Ready': return ['Press ' + d.key + ' in the driver seat.'];
     case 'Driving':
       var parts = ['Driving'];
-      if (state.car) parts.push(Math.round(state.car.speed) + ' km/h');
-      if (state.dest) parts.push(metres(state.dest.distance) + ' left');
-      return parts.join(' · ');
-    case 'Parking': return 'Parking.';
-    case 'Arrived': return (d.reason || '').indexOf('parked') >= 0 ? 'Parked.' : 'Arrived.';
-    case 'Aborted': return stopReason(d.reason || '');
-    default: return state.dest ? metres(state.dest.distance) + ' away' : '';
+      if (state.car) parts.push('·', String(Math.round(state.car.speed)), 'km/h');
+      if (state.dest) { var m = metreParts(state.dest.distance); parts.push('·', m[0], m[1], 'left'); }
+      return parts;
+    case 'Parking': return ['Parking.'];
+    case 'Arrived': return [(d.reason || '').indexOf('parked') >= 0 ? 'Parked.' : 'Arrived.'];
+    case 'Aborted': return [stopReason(d.reason || '')];
+    default:
+      if (!state.dest) return [''];
+      var a = metreParts(state.dest.distance);
+      return [a[0], a[1], 'away'];
   }
 }
 
@@ -114,6 +121,29 @@ function cleanPlate(raw) {
 
 function setClass(el, cls) { if (el.className !== cls) el.className = cls; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
+
+// A line of text as pieces, one element per piece. Sideload rebuilds the whole page when a text changes size, but
+// rewrites a text in place when it keeps its size; with the numbers in pieces of their own, a speed going from 23
+// to 24 km/h touches one small box instead of the page. Layout trims spaces at a piece's edge, even non-breaking
+// ones, so the line spaces its pieces with gap.
+var PIECES = {};
+function setPieces(el, parts) {
+  var have = PIECES[el.id];
+  if (!have || have.length !== parts.length) {
+    el.textContent = '';
+    have = [];
+    for (var i = 0; i < parts.length; i++) {
+      var p = document.createElement('div');
+      p.className = 'pc';
+      p.textContent = parts[i];
+      el.appendChild(p);
+      have.push(p);
+    }
+    PIECES[el.id] = have;
+    return;
+  }
+  for (var k = 0; k < parts.length; k++) setText(have[k], parts[k]);
+}
 
 // The status line and its dot share one state: '' (quiet), 'live' or 'warn'.
 function setStatus(kind) {
@@ -177,10 +207,11 @@ function zoomAt(next, px, py) {
 }
 
 // One style attribute per marker: two style properties re-parse the declaration block twice.
+// Through transform, which Sideload repaints on the one box; left/top would rebuild the page on every move.
 function put(el, x, y, w, h, rot) {
-  var s = 'left:' + (x * WORLD - w / 2).toFixed(1) + 'px;top:' + (y * WORLD - h / 2).toFixed(1) + 'px';
-  if (rot !== undefined) s += ';transform:rotate(' + Math.round(rot) + 'deg)';
-  el.setAttribute('style', s);
+  var t = 'translate(' + (x * WORLD - w / 2).toFixed(1) + 'px, ' + (y * WORLD - h / 2).toFixed(1) + 'px)';
+  if (rot !== undefined) t += ' rotate(' + Math.round(rot) + 'deg)';
+  if (el.style.transform !== t) el.style.transform = t;
 }
 
 function renderMarks() {
@@ -201,6 +232,54 @@ function renderMarks() {
   var pend = $('m-pending');
   show(pend, !!selected);
   if (selected) put(pend, selected.x, selected.y, 16, 16);
+}
+
+// ---- the route ---------------------------------------------------------------------------------------------------
+
+// The road AI's path from the car to its destination. The pieces are built once per path; while the car drives,
+// the pieces it has passed shrink to nothing and the one it is on starts at the car, all through transform.
+var routeRev = -1;
+var routePieces = [];
+
+function piece(el, ax, ay, bx, by) {
+  var x0 = ax * WORLD, y0 = ay * WORLD, x1 = bx * WORLD, y1 = by * WORLD;
+  var len = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+  var deg = Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI;
+  // Sideload maps transform onto the box's RectTransform: scale and rotate turn about transform-origin (the left
+  // end), translate moves it, whatever order they are written in. Half a pixel longer at each end, so the joints
+  // between pieces have no gaps.
+  var ux = len > 0.05 ? (x1 - x0) / len : 0, uy = len > 0.05 ? (y1 - y0) / len : 0;
+  var t = 'translate(' + (x0 - ux * 0.5).toFixed(1) + 'px, ' + (y0 - uy * 0.5 - 1.5).toFixed(1) + 'px) rotate(' +
+    deg.toFixed(1) + 'deg) scale(' + (len > 0.05 ? len + 1 : 0.01).toFixed(2) + ', 1)';
+  if (el.style.transform !== t) el.style.transform = t;
+}
+
+function renderRoute() {
+  var r = state.route;
+  if (!r) {
+    if (routePieces.length) { routeEl.replaceChildren(); routePieces = []; }
+    routeRev = -1;
+    return;
+  }
+  var pts = r.pts, n = pts.length / 2;
+  if (r.rev !== routeRev) {
+    routeRev = r.rev;
+    routeEl.replaceChildren();
+    routePieces = [];
+    for (var i = 0; i + 1 < n; i++) {
+      var el = document.createElement('div');
+      el.className = 'rp';
+      routeEl.appendChild(el);
+      routePieces.push(el);
+    }
+  }
+  var car = state.car;
+  for (var k = 0; k < routePieces.length; k++) {
+    var to = k + 1;
+    if (to < r.at) piece(routePieces[k], pts[2 * to], pts[2 * to + 1], pts[2 * to], pts[2 * to + 1]);
+    else if (to === r.at && car) piece(routePieces[k], car.x, car.y, pts[2 * to], pts[2 * to + 1]);
+    else piece(routePieces[k], pts[2 * k], pts[2 * k + 1], pts[2 * to], pts[2 * to + 1]);
+  }
 }
 
 function renderSpots() {
@@ -323,12 +402,14 @@ function summonLine() {
   switch (m.state) {
     case 'Coming':
       var parts = ['Coming'];
-      if (state.car) parts.push(Math.round(state.car.speed) + ' km/h');
-      if (state.car) parts.push(metres(state.car.distance) + ' away');
-      return parts.join(' · ');
-    case 'Arrived': return 'Your car is here.';
-    case 'Failed': return m.reason || 'Summon stopped.';
-    default: return '';
+      if (state.car) {
+        var d = metreParts(state.car.distance);
+        parts.push('·', String(Math.round(state.car.speed)), 'km/h', '·', d[0], d[1], 'away');
+      }
+      return parts;
+    case 'Arrived': return ['Your car is here.'];
+    case 'Failed': return [m.reason || 'Summon stopped.'];
+    default: return null;
   }
 }
 
@@ -339,7 +420,7 @@ function renderCar() {
 
   if (!car) {
     setText($('car-name'), 'Yesla');
-    setText(line, 'No Yesla nearby');
+    setPieces(line, ['No Yesla nearby']);
     setStatus('');
     show(pic, false);
     setText($('s-top'), '-');
@@ -356,15 +437,14 @@ function renderCar() {
 
     var driving = state.drive && state.drive.state === 'Driving';
     var summoned = summonLine();
-    if (driving) { setText(line, 'Assisted Driving · ' + Math.round(car.speed) + ' km/h'); setStatus('live'); }
-    else if (summoned) { setText(line, summoned); setStatus(state.summon.state === 'Failed' ? 'warn' : 'live'); }
+    if (driving) { setPieces(line, ['Assisted Driving', '·', String(Math.round(car.speed)), 'km/h']); setStatus('live'); }
+    else if (summoned) { setPieces(line, summoned); setStatus(state.summon.state === 'Failed' ? 'warn' : 'live'); }
     else {
-      var parts = [];
-      parts.push(car.speed > 2 ? Math.round(car.speed) + ' km/h' : 'Parked');
-      if (!car.inside) parts.push(metres(car.distance) + ' away');
-      if (car.locked) parts.push('Locked');
-      if (car.sentry) parts.push('Sentry');
-      setText(line, parts.join(' · '));
+      var parts = car.speed > 2 ? [String(Math.round(car.speed)), 'km/h'] : ['Parked'];
+      if (!car.inside) { var dm = metreParts(car.distance); parts.push('·', dm[0], dm[1], 'away'); }
+      if (car.locked) parts.push('·', 'Locked');
+      if (car.sentry) parts.push('·', 'Sentry');
+      setPieces(line, parts);
       setStatus('');
     }
   }
@@ -442,7 +522,7 @@ function renderCard() {
   if (selected) {
     setText(name, selected.label);
     setClass(name, 'dn');
-    setText(line, selected.meta || '');
+    setPieces(line, [selected.meta || '']);
     setClass(line, 'dl');
     send.disabled = !(state.car && state.car.mine);
     clear.disabled = false;
@@ -452,7 +532,7 @@ function renderCard() {
   if (state.dest) {
     setText(name, state.dest.label);
     setClass(name, 'dn');
-    setText(line, driveLine());
+    setPieces(line, driveLine());
     var st = state.drive ? state.drive.state : '';
     setClass(line, st === 'Driving' || st === 'Parking' || st === 'Arrived' ? 'dl live' : (st === 'Aborted' ? 'dl warn' : 'dl'));
     clear.disabled = false;
@@ -460,7 +540,7 @@ function renderCard() {
   }
   setText(name, 'Tap the map or search a place');
   setClass(name, 'dn quiet');
-  setText(line, '');
+  setPieces(line, ['']);
   clear.disabled = true;
 }
 
@@ -573,6 +653,7 @@ function resetPlate() {
 // ---- wiring ----------------------------------------------------------------------------------------------------
 
 function renderAll() {
+  renderRoute();
   renderMarks();
   renderCar();
   renderProfiles();
@@ -619,11 +700,10 @@ $('search').addEventListener('keydown', function (e) {
 });
 
 $('locate').addEventListener('click', function () {
-  skipTap = true;
   var t = state.car || state.player;
   if (t) centreOn(t.x, t.y);
 });
-$('full').addEventListener('click', function () { skipTap = true; setFull(!full); });
+$('full').addEventListener('click', function () { setFull(!full); });
 
 $('plate-in').addEventListener('input', function (e) {
   plateDraft = (e.value !== undefined ? e.value : $('plate-in').value) || '';
@@ -633,8 +713,18 @@ $('plate-in').addEventListener('keydown', function (e) { if (e.key === 'Enter') 
 $('plate-apply').addEventListener('click', applyPlate);
 $('plate-reset').addEventListener('click', resetPlate);
 
+// The card, the search and the map buttons sit inside the map frame, so their clicks bubble up to it. Those are
+// not taps on the map: without this check Clear and Send dropped a new pin under the card right after.
+var OVERLAYS = ['card', 'find', 'mapbtns', 'tag'];
+function fromOverlay(e) {
+  for (var n = e.target; n && n !== viewportEl; n = n.parentNode) {
+    if (OVERLAYS.indexOf(n.id) >= 0 || OVERLAYS.indexOf(n.className) >= 0) return true;
+  }
+  return false;
+}
+
 viewportEl.addEventListener('click', function (e) {
-  if (skipTap) { skipTap = false; return; }
+  if (fromOverlay(e)) return;
   if (searching || query) { closeSearch(); return; }
   var p = inView(e);
   if (!p) { console.warn('[map] click without a position - no pin set'); return; }

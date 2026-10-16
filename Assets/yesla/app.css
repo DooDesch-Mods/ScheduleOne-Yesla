@@ -44,7 +44,7 @@ body {
 .sdot { width: 6px; height: 6px; border-radius: 3px; background: #5d6168; flex: none; }
 .sdot.live { background: var(--ok); }
 .sdot.warn { background: var(--warn); }
-.status { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status { flex: 1; min-width: 0; flex-direction: row; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status.live { color: var(--ok); }
 .status.warn { color: var(--warn); }
 
@@ -107,6 +107,9 @@ body {
 .nomap.on { display: flex; }
 .layer { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; }
 
+/* One route piece: 1px long and stretched by its transform, so moving the line repaints instead of laying out. */
+.rp { position: absolute; left: 0; top: 0; width: 1px; height: 3px; background: #2c7dfa; transform-origin: 0 50%; }
+
 .spot { position: absolute; width: 7px; height: 7px; border-radius: 4px; background: #c9ccd1; box-shadow: 0 0 2px #000000; }
 .spot.quest { background: #f2c94c; }
 .spot.property { background: #4a9cf3; }
@@ -116,20 +119,20 @@ body {
 .spot.stash { background: #c4544f; }
 .spot.vehicle { background: #7d8590; }
 
-.me { position: absolute; width: 22px; height: 22px; border-radius: 11px; background: #4ea7ff33; align-items: center; justify-content: center; }
+.me { position: absolute; left: 0; top: 0; width: 22px; height: 22px; border-radius: 11px; background: #4ea7ff33; align-items: center; justify-content: center; }
 .me .ring { width: 10px; height: 10px; border-radius: 5px; background: #ffffff; align-items: center; justify-content: center; }
 .me .dot { width: 6px; height: 6px; border-radius: 3px; background: #4ea7ff; }
 
 /* The car seen from above, nose up before rotation. */
-.mcar { position: absolute; width: 9px; height: 16px; border-radius: 3px; background: #ffffff; box-shadow: 0 0 3px #000000; align-items: center; }
+.mcar { position: absolute; left: 0; top: 0; width: 9px; height: 16px; border-radius: 3px; background: #ffffff; box-shadow: 0 0 3px #000000; align-items: center; }
 .mcar .nose { width: 5px; height: 3px; margin-top: 2px; border-radius: 1px; background: #3e6ae1; }
 
 .dest {
-  position: absolute; width: 16px; height: 16px; border-radius: 8px;
+  position: absolute; left: 0; top: 0; width: 16px; height: 16px; border-radius: 8px;
   background: #ffffff; align-items: center; justify-content: center; box-shadow: 0 1px 4px #000000;
 }
 .dest .core { width: 10px; height: 10px; border-radius: 5px; background: var(--accent); }
-.pending { position: absolute; width: 16px; height: 16px; border-radius: 8px; background: #ffffffcc; align-items: center; justify-content: center; }
+.pending { position: absolute; left: 0; top: 0; width: 16px; height: 16px; border-radius: 8px; background: #ffffffcc; align-items: center; justify-content: center; }
 .pending .core { width: 10px; height: 10px; border-radius: 5px; background: #3e6ae188; }
 
 /* Search, on the map. Results drop down under the field. */
@@ -179,8 +182,9 @@ body {
 .dt { flex: 1; min-width: 0; gap: 1px; }
 .dn { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dn.quiet { font-size: 12px; font-weight: 400; color: var(--muted); }
-.dl { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl { flex-direction: row; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dl.live { color: var(--ok); }
+.pc { flex: none; white-space: nowrap; }
 .dl.warn { color: var(--warn); }
 
 .tag {

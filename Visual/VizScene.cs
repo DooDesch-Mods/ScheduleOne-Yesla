@@ -450,7 +450,7 @@ namespace Yesla.Visual
         /// The game's renderer features (its fog, rain, outlines, full-screen effects) run for every camera, this one
         /// too. They go off for the one render and back on right after, as the game's own IconGenerator does.
         /// </summary>
-        private static void FeaturesOff()
+        internal static void FeaturesOff()
         {
             Paused.Clear();
             if (!NetworkSingleton<Il2CppScheduleOne.Weather.EnvironmentManager>.InstanceExists)
@@ -481,7 +481,7 @@ namespace Yesla.Visual
             }
         }
 
-        private static void FeaturesBack()
+        internal static void FeaturesBack()
         {
             foreach (var f in Paused)
                 if (f != null) f.SetActive(true);

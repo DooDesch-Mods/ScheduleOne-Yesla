@@ -21,6 +21,13 @@ namespace Yesla.Phone
         internal Json Prop(string key, bool value) { Key(key); _first = false; _sb.Append(value ? "true" : "false"); return this; }
         internal Json Null(string key) { Key(key); _first = false; _sb.Append("null"); return this; }
 
+        /// <summary>Bare numbers, for the inside of an array.</summary>
+        internal Json Numbers(System.Collections.Generic.List<double> values)
+        {
+            foreach (double v in values) { Sep(); _sb.Append(Num(v)); }
+            return this;
+        }
+
         public override string ToString() => _sb.ToString();
 
         private void Sep()

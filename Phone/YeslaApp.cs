@@ -73,6 +73,10 @@ namespace Yesla.Phone
             UpdateIcon(now);
             if (!_app.IsOnScreen) return;
 
+            LandVehicle mine = MyCar();
+            MapRoute.Update(mine);
+            Fleet.Rec mineRec = mine != null ? Fleet.For(mine) : null;
+            CarPhoto.Update(_app, mine, mineRec != null ? mineRec.PlateText : "", force: false);
             int state = Revision();
             if (state != _pushedState)
             {
@@ -136,6 +140,8 @@ namespace Yesla.Phone
         {
             MapPicture.Reset();
             CarPicture.Reset();
+            CarPhoto.Reset();
+            MapRoute.Clear("the session ended");
             _pushedState = int.MinValue;
             _pushedPlaces = int.MinValue;
             _iconShown = null;
@@ -190,7 +196,7 @@ namespace Yesla.Phone
                     .Prop("locked", rec != null && rec.Locked)
                     .Prop("sentry", rec != null && rec.Sentry)
                     .Prop("paint", paint.ToString())
-                    .Prop("picture", CarPicture.Ensure(_app, paint) ?? "")
+                    .Prop("picture", CarPhoto.Current ?? CarPicture.Ensure(_app, paint) ?? "")
                     .Prop("plate", rec != null ? rec.PlateText : "")
                     .Prop("plateOwn", rec != null ? rec.Plate : "")
                     .Prop("plateDefault", rec != null ? rec.DefaultPlate : "")
@@ -211,6 +217,8 @@ namespace Yesla.Phone
                     .Close();
             }
             else j.Null("dest");
+
+            MapRoute.Write(j);
 
             j.Key("drive").Open()
                 .Prop("state", Autopilot.State.ToString())
@@ -366,6 +374,9 @@ namespace Yesla.Phone
                 h = h * 31 + Fleet.Revision;
                 h = h * 31 + Summon.Revision;
                 h = h * 31 + DriveProfile.Current.Id.GetHashCode();
+                h = h * 31 + MapRoute.Revision;
+                h = h * 31 + (CarPhoto.Current ?? string.Empty).GetHashCode();
+                h = h * 31 + MapRoute.At;
                 return h;
             }
         }
