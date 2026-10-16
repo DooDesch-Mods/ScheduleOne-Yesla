@@ -140,6 +140,24 @@
       <HintPath>$(GameManagedPath)/UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- The driving visualisation: its HUD canvas and text. -->
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(GameManagedPath)/UnityEngine.UIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.TextMeshPro">
+      <HintPath>$(GameManagedPath)/Unity.TextMeshPro.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- The visualisation switches the game's renderer features (fog, rain, outlines) off for its own render. -->
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime">
+      <HintPath>$(GameManagedPath)/Unity.RenderPipelines.Universal.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime">
+      <HintPath>$(GameManagedPath)/Unity.RenderPipelines.Core.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- The synthesised electric drive sound. -->
     <Reference Include="UnityEngine.AudioModule">
       <HintPath>$(GameManagedPath)/UnityEngine.AudioModule.dll</HintPath>

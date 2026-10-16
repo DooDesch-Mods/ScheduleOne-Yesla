@@ -10,7 +10,8 @@ namespace Yesla.Driving
 {
     /// <summary>
     /// Adds the Yesla keys to the key hints at the bottom left while the local player sits in a Yesla, next to the
-    /// game's own Headlights / Handbrake / Exit Vehicle: "First Person" in every seat, "Assisted Driving" for the driver.
+    /// game's own Headlights / Handbrake / Exit Vehicle: "First Person" and "Visualisation" in every seat, "Assisted Driving"
+    /// for the driver.
     ///
     /// The hint strip only draws descriptors that point at an input action, and the Yesla keys are plain keys from the
     /// preferences, not one of the game's actions. So each entry gets its own action bound to its key; the strip
@@ -21,6 +22,7 @@ namespace Yesla.Driving
         private const string ModuleId = "yesla_assisted_driving";
         private const string DriveLabel = "Assisted Driving";
         private const string ViewLabel = "First Person";
+        private const string VizLabel = "Visualisation";
 
         private static InputPromptsData _data;
         private static string _dataSig;
@@ -66,7 +68,7 @@ namespace Yesla.Driving
 
         private static string Signature(bool driver)
         {
-            string view = Preferences.ViewKey + " " + ViewLabel;
+            string view = Preferences.ViewKey + " " + ViewLabel + ", " + Preferences.VizKey + " " + VizLabel;
             return driver ? Preferences.EngageKey + " " + DriveLabel + ", " + view : view;
         }
 
@@ -86,6 +88,7 @@ namespace Yesla.Driving
             data.Descriptors = new Il2CppSystem.Collections.Generic.List<InputPromptsDescriptorData>();
             if (driver) Add(data, map, "AssistedDriving", DriveLabel, Preferences.EngageKey);
             Add(data, map, "FirstPerson", ViewLabel, Preferences.ViewKey);
+            Add(data, map, "Visualisation", VizLabel, Preferences.VizKey);
             if (data.Descriptors.Count == 0) return null;
 
             _data = data;

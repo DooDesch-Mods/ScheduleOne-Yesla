@@ -107,11 +107,11 @@ namespace Yesla.Driving
             {
                 case VehicleAgent.ENavigationResult.Complete:
                     Release();
-                    SetState(DriveState.Arrived, "arrived at " + DestinationLabel);
+                    SetState(DriveState.Arrived, "arrived at " + DestinationLabel, DriveState.Driving);
                     break;
                 case VehicleAgent.ENavigationResult.Failed:
                     Release();
-                    SetState(DriveState.Aborted, "no route to " + DestinationLabel);
+                    SetState(DriveState.Aborted, "no route to " + DestinationLabel, DriveState.Driving);
                     break;
             }
         }
@@ -120,7 +120,7 @@ namespace Yesla.Driving
         {
             if (State != DriveState.Driving) return;
             Release();
-            SetState(DriveState.Aborted, reason);
+            SetState(DriveState.Aborted, reason, DriveState.Driving);
         }
 
         /// <summary>Stops the agent and hands the controls back. Safe when the car is already gone.</summary>
@@ -184,11 +184,13 @@ namespace Yesla.Driving
                  + " last=" + (LastReason.Length > 0 ? LastReason : "-") + agent;
         }
 
-        private static void SetState(DriveState next, string reason)
+        /// <param name="from">The state to log as the previous one, when Release has already cleared it.</param>
+        private static void SetState(DriveState next, string reason, DriveState? from = null)
         {
             LastReason = reason;
-            if (State == next) { Core.Log.Msg("[Autopilot] " + next + " (" + reason + ")"); return; }
-            Core.Log.Msg("[Autopilot] " + State + " -> " + next + " (" + reason + ")");
+            DriveState was = from ?? State;
+            if (was == next) { Core.Log.Msg("[Autopilot] " + next + " (" + reason + ")"); State = next; return; }
+            Core.Log.Msg("[Autopilot] " + was + " -> " + next + " (" + reason + ")");
             State = next;
         }
 

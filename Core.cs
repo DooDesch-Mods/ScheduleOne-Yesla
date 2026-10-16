@@ -77,6 +77,7 @@ namespace Yesla
             DestinationMarker.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
+            Visual.Viz.Reset();
             Phone.YeslaApp.Reset();
         }
 
@@ -93,6 +94,7 @@ namespace Yesla
             Vehicle.Sentry.Tick();
             DestinationMarker.Tick();
             FirstPerson.Tick();
+            Visual.Viz.Tick();
             KeyHint.Tick();
             Phone.YeslaApp.Tick();
         }
@@ -103,6 +105,7 @@ namespace Yesla
             // After VehicleAgent.LateUpdate has written its overrides; reads the driver's own input for a takeover.
             Autopilot.LateTick();
             PathFollower.LateTick();
+            Visual.Viz.LateTick();
         }
     }
 }

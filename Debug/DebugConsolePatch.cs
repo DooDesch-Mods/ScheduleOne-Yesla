@@ -70,6 +70,10 @@ namespace Yesla.Debugging
                         Say("steer <x>          - set the steering axis like a key press (0 releases it)");
                         Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
                         Say("fp eye <x> <y> <z> - eye position in the seat's local space");
+                        Say("viz [hud|full|off] - driving visualisation view (same as the visualisation key)");
+                        Say("viz save [path]    - write the current visualisation picture to a PNG");
+                        Say("vizprobe           - road links, layers, shaders and cameras the visualisation uses");
+                        Say("cabin <i> [range] [x y z] - tune the first-person cabin light live");
                         Say("clear              - forget the destination");
                         Say("spawn [code] [m] [yaw] - spawn a player-owned car ahead (default hounddog, 8 m, yaw 0)");
                         Say("enter              - get into the nearest owned car within 10 m");
@@ -317,6 +321,42 @@ namespace Yesla.Debugging
                             NavCheck.Run(Phone.YeslaApp.MyCar(), new Vector3(nx, ny, nz));
                         else NavCheck.Run();
                         Say("navcheck runs - see the [NavCheck] lines in the log");
+                        break;
+
+                    case "viz":
+                    {
+                        // 'viz' reports, 'viz hud|full|off' sets the view, 'viz save [path]' writes the current picture.
+                        string arg = parts.Length > 2 ? parts[2].ToLowerInvariant() : "";
+                        if (arg == "hud") Visual.Viz.Set(Visual.VizMode.Hud, "console");
+                        else if (arg == "full") Visual.Viz.Set(Visual.VizMode.Full, "console");
+                        else if (arg == "off") Visual.Viz.Set(Visual.VizMode.Off, "console");
+                        else if (arg == "save")
+                        {
+                            string path = parts.Length > 3 ? string.Join(" ", parts, 3, parts.Length - 3)
+                                : System.IO.Path.Combine(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, "yesla-viz.png");
+                            Say(Visual.VizScene.Save(path));
+                            break;
+                        }
+                        else if (arg != "") { Say("usage: yesla viz [hud|full|off|save [path]]"); break; }
+                        Say("view " + Visual.Viz.Mode + ", " + Visual.VizScene.Describe());
+                        break;
+                    }
+
+                    case "cabin":
+                    {
+                        // 'cabin <intensity> [range] [x y z]' tunes the first-person cabin light live.
+                        var f = new List<float>();
+                        for (int i = 2; i < parts.Length; i++)
+                            if (float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float n)) f.Add(n);
+                        if (f.Count == 0) { Say("usage: yesla cabin <intensity> [range] [x y z]"); break; }
+                        Vector3? at = f.Count >= 5 ? new Vector3(f[2], f[3], f[4]) : (Vector3?)null;
+                        Say(Visual.CabinLight.Tune(f[0], f.Count > 1 ? f[1] : 1.8f, at));
+                        break;
+                    }
+
+                    case "vizprobe":
+                        VizProbe.Run();
+                        Say("vizprobe done - see the [VizProbe] lines in the log");
                         break;
 
                     case "fp":
