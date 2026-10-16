@@ -50,6 +50,7 @@ namespace Yesla.Visual
                 if (FirstPerson.Active || screen != VizMode.Off) VizScene.Tick(_car);
                 VizHud.Show(screen);
                 CenterScreen.Show(_car);
+                Cabin.Show(_car);
                 CabinLight.Show(_car, FirstPerson.Active);
             }
             catch (Exception e)
@@ -83,6 +84,7 @@ namespace Yesla.Visual
             _car = null;
             VizHud.Show(VizMode.Off);
             CenterScreen.Show(null);
+            Cabin.Show(null);
             CabinLight.Show(null, false);
         }
 
@@ -91,6 +93,7 @@ namespace Yesla.Visual
             _car = null;
             _failed = false;
             CenterScreen.Reset();
+            Cabin.Reset();
             CabinLight.Reset();
             VizHud.Destroy();
             VizScene.Destroy();

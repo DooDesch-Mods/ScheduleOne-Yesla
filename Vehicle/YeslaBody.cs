@@ -74,6 +74,26 @@ namespace Yesla.Vehicle
                 }
             }
 
+            // The cabin: Cabin_LOD0 is drawn with LOD0; Cabin_HI, the detailed one, stays outside the LODGroup and only
+            // replaces Cabin_LOD0 in the car the local player sits in (Visual.Cabin.Show).
+            if (model.Nodes.TryGetValue("Cabin_LOD0", out List<GlbModel.Part> cabinParts))
+            {
+                var cabin = new GameObject(Visual.Cabin.LowName);
+                cabin.layer = layer;
+                cabin.transform.SetParent(root.transform, false);
+                foreach (GlbModel.Part part in cabinParts) lods[0].Add(AddPart(cabin.transform, part, layer));
+            }
+            else Core.Log.Warning("[Body] the model has no Cabin_LOD0 - the car has no interior.");
+            if (model.Nodes.TryGetValue("Cabin_HI", out List<GlbModel.Part> cabinHi))
+            {
+                var hi = new GameObject(Visual.Cabin.HighName);
+                hi.layer = layer;
+                hi.SetActive(false);
+                hi.transform.SetParent(root.transform, false);
+                foreach (GlbModel.Part part in cabinHi) AddPart(hi.transform, part, layer);
+            }
+            else Core.Log.Warning("[Body] the model has no Cabin_HI - the driver sees the low cabin.");
+
             // The visualisation's stand-in car. It stays inactive and outside the LODGroup, so the world never draws it;
             // VizScene only reads its meshes and transforms.
             if (model.Nodes.TryGetValue("Body_Viz", out List<GlbModel.Part> vizParts))
