@@ -183,7 +183,7 @@ namespace Yesla.Phone
                 j.Key("car").Open()
                     .Prop("x", cx).Prop("y", cy).Prop("h", car.transform.eulerAngles.y)
                     .Prop("name", car.VehicleName)
-                    .Prop("speed", Mathf.Abs(car.Speed_Kmh))
+                    .Prop("speed", Mathf.Abs(car.Speed_Kmh) * Visual.VizOverlay.ShownSpeed)
                     .Prop("inside", Autopilot.CurrentCar() != null && Autopilot.CurrentCar().Pointer == car.Pointer)
                     .Prop("distance", local != null ? Vector3.Distance(local.transform.position, car.transform.position) : 0)
                     .Prop("mine", Fleet.IsMine(car))

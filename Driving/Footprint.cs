@@ -149,7 +149,7 @@ namespace Yesla.Driving
         /// <summary>
         /// A player sitting in this car: their capsule stays a world object beside the seat, not a child of the car.
         /// </summary>
-        private static bool Aboard(Collider c, LandVehicle car)
+        internal static bool Aboard(Collider c, LandVehicle car)
         {
             var p = c.GetComponentInParent<Il2CppScheduleOne.PlayerScripts.Player>();
             if (p == null) return false;

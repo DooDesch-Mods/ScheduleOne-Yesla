@@ -62,6 +62,13 @@ namespace Yesla.Net
             YeslaNet.ToHost("req.park", Id(car), Fleet.MyCode(), spot.LotGuid, spot.Index.ToString(CultureInfo.InvariantCulture));
         }
 
+        /// <summary>The turn signal of the car this player's Assisted Driving drives: -1 left, 1 right, 0 off.</summary>
+        internal static void Blink(LandVehicle car, int side)
+        {
+            if (car == null) return;
+            YeslaNet.ToHost("req.blink", Id(car), side.ToString(CultureInfo.InvariantCulture));
+        }
+
         private static string Id(LandVehicle car) => Fleet.NetId(car).ToString(CultureInfo.InvariantCulture);
 
         // ---- host --------------------------------------------------------------------------------------------------
@@ -111,6 +118,14 @@ namespace Yesla.Net
                         if (refused != null) Core.Log.Warning("[Remote] plate refused: " + refused + ".");
                         return;
                     }
+                case "req.blink":
+                    {
+                        // Any player may drive any Yesla with Assisted Driving, so the signal needs no owner.
+                        if (!int.TryParse(m.Arg(0), out int id) || !int.TryParse(m.Arg(1), out int side)) { Bad(m); return; }
+                        if (Fleet.FindById(id) == null) { Core.Log.Warning("[Remote] blink for car #" + id + ", which is not here."); return; }
+                        YeslaNet.ToAll("blink", m.Arg(0), Mathf.Clamp(side, -1, 1).ToString(CultureInfo.InvariantCulture));
+                        return;
+                    }
                 case "req.park":
                     {
                         LandVehicle car = OwnedCar(m, out string why);
@@ -147,6 +162,12 @@ namespace Yesla.Net
                 case "cars": Fleet.ApplyState(m.Arg(0)); return;
                 case "summon": Summon.ApplyState(m.Arg(0), m.Arg(1), m.Arg(2)); return;
                 case "sentry": Sentry.ApplyState(m.Arg(0), m.Arg(1), m.Arg(2)); return;
+                case "blink":
+                    {
+                        if (!int.TryParse(m.Arg(0), out int bid) || !int.TryParse(m.Arg(1), out int side)) { Core.Log.Warning("[Remote] unreadable blink " + m + "."); return; }
+                        Indicators.Set(Fleet.FindById(bid), side);
+                        return;
+                    }
                 case "honk":
                     if (!int.TryParse(m.Arg(0), out int id)) { Core.Log.Warning("[Remote] unreadable honk " + m + "."); return; }
                     Horn.Play(Fleet.FindById(id));

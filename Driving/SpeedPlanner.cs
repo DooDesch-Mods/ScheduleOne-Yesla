@@ -96,6 +96,14 @@ namespace Yesla.Driving
                 if (allowed < best) { best = allowed; why = "destination in " + toEnd.ToString("F0") + " m"; }
             }
 
+            // A lot spot to park in: the road AI hands over at walking pace, and the turn into the lot is taken at it.
+            if (Autopilot.DrivenCar != null && Autopilot.DrivenCar.Pointer == car.Pointer && Autopilot.LotSpotAhead != null)
+            {
+                Vector3 toSpot = Autopilot.LotSpotAhead.Centre - car.transform.position; toSpot.y = 0f;
+                float allowed = Reach(Parking.HandOverKmh / 3.6f, toSpot.magnitude - Parking.HandOver - reaction, a);
+                if (allowed < best) { best = allowed; why = "parking in " + toSpot.magnitude.ToString("F0") + " m"; }
+            }
+
             // A lower speed zone ahead.
             if (!p.NoLimit)
             {

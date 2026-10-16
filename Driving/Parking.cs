@@ -79,10 +79,15 @@ namespace Yesla.Driving
         /// <summary>Metres backed straight down the spot's axis after the arc.</summary>
         private const float StraightIn = 2.5f;
         /// <summary>
-        /// The line the car drives past the spot on: its rear axle this far out from the spot's centre, so its side
-        /// passes about a metre clear of the cars parked in the row, as driving schools teach.
+        /// The line the car drives past the spot on: its rear axle this far out from the spot's centre. A spot runs
+        /// about 2.4 m from its centre to its front edge and the car is 0.95 m wide to its side, so the side passes
+        /// about half a metre from the spots' front edge: the closer it passes, the more of the aisle is left to swing
+        /// out into.
         /// </summary>
-        private const float PassLine = 4.4f;
+        private const float PassLine = 3.9f;
+        /// <summary>The pass lines tried, closest first: the wider one when a fence across a short aisle blocks the
+        /// bigger swing the close line needs.</summary>
+        private static readonly float[] PassLines = { PassLine, 4.4f };
         /// <summary>Radii tried for the swing away from the spot and the arc back into it, widest first; full lock
         /// comes last and needs no swing at all.</summary>
         private static readonly float[] SwingRadii = { 6f, 5f, 4.2f };
@@ -97,6 +102,20 @@ namespace Yesla.Driving
         private const float NoseInFrom = 120f;
         /// <summary>The car drives this far along the aisle straight before the stop point, where there is room.</summary>
         private const float StageLeadIn = 5f;
+        /// <summary>
+        /// Further than this from the stop point, a post or a hydrant ahead is steered around instead of starting the
+        /// reverse from where the car stands: no arc reaches the spot from there.
+        /// </summary>
+        private const float StageSteerAround = 4f;
+        /// <summary>How far the aim point moves away from the side a post was hit on, and how fast.</summary>
+        private const float StageNudge = 1.2f;
+        private const float StageNudgeRate = 2f;
+        /// <summary>
+        /// A post right at the bumper is not passed by steering alone: the car backs this far with the wheels turned,
+        /// which swings the nose away from it, at most <see cref="StageBackOffs"/> times before the spot is given up.
+        /// </summary>
+        private const float StageBackOff = 2f;
+        private const int StageBackOffs = 3;
         /// <summary>Backing in from where the car stands: at most this far straight back before the arc, and no wider arc.</summary>
         private const float MaxStraightBack = 4f, MaxArc = 12f;
         /// <summary>A retry after backing in crooked lines up on the spot's axis this far out.</summary>
@@ -232,7 +251,7 @@ namespace Yesla.Driving
             for (int i = 0; i < hits.Length; i++)
             {
                 Collider c = hits[i];
-                if (c == null || c.transform.IsChildOf(car.transform)) continue;
+                if (c == null || c.transform.IsChildOf(car.transform) || Footprint.Aboard(c, car)) continue;
                 Transform up = c.transform.parent;
                 what = (up != null ? up.name + "/" : "") + c.name;
                 return false;
@@ -253,12 +272,12 @@ namespace Yesla.Driving
             if (len < 0.1f) return true;
             Vector3 mid = (from + to) * 0.5f;
             mid.y = Mathf.Max(Ground(car, from + Vector3.up), Ground(car, to + Vector3.up)) + 0.95f;
-            var hits = Physics.OverlapBox(mid, new Vector3(car.BoundingBoxDimensions.x * 0.5f, 0.45f, len * 0.5f), Quaternion.LookRotation(run / len),
+            var hits = Physics.OverlapBox(mid, new Vector3(car.BoundingBoxDimensions.x * 0.5f + CorridorMargin, 0.45f, len * 0.5f), Quaternion.LookRotation(run / len),
                                           Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
             for (int i = 0; i < hits.Length; i++)
             {
                 Collider c = hits[i];
-                if (c == null || c.transform.IsChildOf(car.transform)) continue;
+                if (c == null || c.transform.IsChildOf(car.transform) || Footprint.Aboard(c, car)) continue;
                 Transform up = c.transform.parent;
                 what = (up != null ? up.name + "/" : "") + c.name;
                 return false;
@@ -266,15 +285,107 @@ namespace Yesla.Driving
             return true;
         }
 
+        /// <summary>Room kept round the car's outline on a planned turn: the car follows the line within a few
+        /// decimetres, and the outer front corner is the part that meets a fence.</summary>
+        private const float OutlineMargin = 0.25f;
+        /// <summary>The backing arc is checked up to this angle; past it the car is between the spot's neighbours,
+        /// which <see cref="Free"/> and the spot's own check cover.</summary>
+        private const float OutlineUpTo = 60f;
+
+        /// <summary>
+        /// Whether the car's whole outline, at <paramref name="centre"/> facing <paramref name="facing"/>, is clear at
+        /// bumper to roof height. On a turn the outer front corner swings up to a metre wider than a strip between
+        /// the car's centres, so the strip passes a fence that the corner hits.
+        /// </summary>
+        private static bool Outline(LandVehicle car, Vector3 centre, Vector3 facing, out string what)
+        {
+            what = string.Empty;
+            Vector3 dims = car.BoundingBoxDimensions;
+            float ground = Ground(car, centre + Vector3.up);
+            Vector3 middle = new Vector3(centre.x, ground + 0.95f, centre.z);
+            Vector3 half = new Vector3(dims.x * 0.5f + OutlineMargin, 0.45f, dims.z * 0.5f + OutlineMargin);
+            var hits = Physics.OverlapBox(middle, half, Quaternion.LookRotation(Flat(facing).normalized), Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Collider c = hits[i];
+                if (c == null || c.transform.IsChildOf(car.transform) || Footprint.Aboard(c, car)) continue;
+                Transform up = c.transform.parent;
+                what = (up != null ? up.name + "/" : "") + c.name + " at the car's outline";
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>Room left beside the car on a planned run: pursuit cuts the corners of the line a little.</summary>
+        private const float CorridorMargin = 0.15f;
+        /// <summary>A step in the ground of more than this between two samples is a kerb; a lowered kerb or a ramp is less.</summary>
+        private const float KerbStep = 0.12f;
+        private const float KerbSample = 0.25f;
+
+        /// <summary>
+        /// Whether a raised kerb crosses the wheel tracks from <paramref name="from"/> to <paramref name="to"/>. The
+        /// ground is felt under both tracks every <see cref="KerbSample"/> metres; the lowered kerb at a lot's
+        /// driveway rises in small steps and passes, a kerb stone along the pavement does not. Only static ground
+        /// counts, so cars and people are left to <see cref="Corridor"/>.
+        /// </summary>
+        private static bool KerbOnRun(LandVehicle car, Vector3 from, Vector3 to, out string what)
+        {
+            what = string.Empty;
+            Vector3 run = Flat(to - from);
+            float len = run.magnitude;
+            if (len < 0.1f) return false;
+            Vector3 dir = run / len;
+            Vector3 side = Vector3.Cross(Vector3.up, dir) * Mathf.Max(0.3f, car.BoundingBoxDimensions.x * 0.5f - 0.25f);
+            float top = Mathf.Max(Ground(car, from + Vector3.up), Ground(car, to + Vector3.up)) + 1.5f;
+            int n = Mathf.CeilToInt(len / KerbSample);
+            for (int track = -1; track <= 1; track += 2)
+            {
+                float was = float.NaN;
+                for (int k = 0; k <= n; k++)
+                {
+                    Vector3 p = from + dir * (len * k / n) + side * track;
+                    if (!GroundAt(car, new Vector3(p.x, top, p.z), out float h)) { was = float.NaN; continue; }
+                    if (!float.IsNaN(was) && Mathf.Abs(h - was) > KerbStep)
+                    {
+                        what = "a kerb (" + Mathf.Abs(h - was).ToString("F2") + " m step) at the " + (track < 0 ? "left" : "right") + " " + (len * k / n).ToString("F1") + " m";
+                        return true;
+                    }
+                    was = h;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>The highest static ground straight down from <paramref name="top"/>, skipping the car.</summary>
+        private static bool GroundAt(LandVehicle car, Vector3 top, out float h)
+        {
+            h = float.MinValue;
+            var hits = Physics.RaycastAll(top, Vector3.down, 4f, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Collider c = hits[i].collider;
+                if (c == null || c.attachedRigidbody != null || c.transform.IsChildOf(car.transform)) continue;
+                if (hits[i].point.y > h) h = hits[i].point.y;
+            }
+            return h > float.MinValue;
+        }
+
         /// <summary>The road AI hands over this close to the spot, as soon as the run into the aisle is clear.</summary>
-        private const float HandOver = 25f;
+        internal const float HandOver = 25f;
+        /// <summary>The road AI slows to this before it hands over, and hands over no faster: the turn into a lot
+        /// passes hydrants and posts close by, and parking starts at walking pace.</summary>
+        internal const float HandOverKmh = 12f;
+        /// <summary>The car backs in only when it can stand this far out on the spot's axis; a shallower aisle has no
+        /// room to swing out, and the car parks nose first along it.</summary>
+        private const float MinReverseRoom = 6f;
         /// <summary>The aisle in front of the spot, as far out as the car stops to back in.</summary>
         private const float AisleOut = 4.5f;
         private static string _reachBlock = string.Empty;
 
         /// <summary>
         /// Whether the car is close enough to the spot to take over from the road AI, with nothing between it and
-        /// the aisle in front of the spot at bumper to roof height. Kerbs are lower and do not count. The parking
+        /// the aisle in front of the spot at bumper to roof height and no raised kerb on the way: the road AI keeps the
+        /// car until the straight run goes through the lot's lowered kerb rather than over the pavement. The parking
         /// manoeuvre then starts with room to line up instead of where the road AI stops, a few metres from the spot.
         /// </summary>
         internal static bool InReach(LandVehicle car, ParkTarget t, out string why)
@@ -282,14 +393,25 @@ namespace Yesla.Driving
             why = string.Empty;
             Vector3 pos = car.transform.position;
             if (Flat(t.Centre - pos).magnitude > HandOver) return false;
+            if (Mathf.Abs(car.Speed_Kmh) > HandOverKmh + 2f) return false;
             Vector3 front = t.Centre - t.Into * AisleOut;
             float d = Flat(front - pos).magnitude;
             if (d < 1f) { why = "at the aisle in front of it"; return true; }
             Vector3 nose = pos + Flat(front - pos) / d * (car.BoundingBoxDimensions.z * 0.5f);
-            if (!Corridor(car, nose, front, out string what))
+            if (!Corridor(car, nose, front, out string what) || KerbOnRun(car, nose, front, out what))
             {
                 if (what != _reachBlock) Core.Log.Msg("[Park] " + t.Label + " is " + Flat(t.Centre - pos).magnitude.ToString("F0") + " m away, " + what + " stands between the car and its aisle - the road AI drives on.");
                 _reachBlock = what;
+                return false;
+            }
+            // Backing in, the car drives the stage line from where it stands, not the straight run: that line has to
+            // be clear too, or a hydrant beside the driveway and the kerb next to it end up under the swing.
+            bool noseIn = t.Reverse && Config.Preferences.ParkDirection == "auto" && NoseInArc(car, t, Flat3(pos, t.Centre.y), car.transform.forward, null, out _);
+            if (t.Reverse && !noseIn && !PlanReverse(car, t, Flat3(pos, t.Centre.y), true, out string stage)
+                && !NoseInLane(car, t, Flat3(pos, t.Centre.y), null, out _))
+            {
+                if (stage != _reachBlock) Core.Log.Msg("[Park] " + t.Label + " is " + Flat(t.Centre - pos).magnitude.ToString("F0") + " m away, the line to back in from here is blocked by " + stage + " - the road AI drives on.");
+                _reachBlock = stage;
                 return false;
             }
             _reachBlock = string.Empty;
@@ -320,12 +442,20 @@ namespace Yesla.Driving
         private static bool _turning;
         private static Vector3 _backFrom;
         private static float _phaseTime, _blockedFor, _stillFor, _stuckFor, _steer;
+        /// <summary>How long the run to the stop point may take: its length at approach speed, half again, plus slack.</summary>
+        private static float _stageBudget = 15f;
+        /// <summary>Metres to the left (negative: right) of the stage path the car aims, away from a post.</summary>
+        private static float _nudge;
+        private static bool _stageBacking;
+        private static int _stageBackOffs;
         private static string _blockedBy = string.Empty;
 
         internal static bool Active => _car != null;
 
         /// <summary>The spot the running manoeuvre heads for, or null.</summary>
         internal static ParkTarget Current => _target;
+        /// <summary>The car stands in the spot and is braking to a halt.</summary>
+        internal static bool Settling => _car != null && _phase == Phase.Settle;
         internal static string Describe() => _car == null ? "parking: idle"
             : "parking: " + _target.Label + " phase " + _phase + " try " + _tries + " " + Pose();
 
@@ -357,7 +487,19 @@ namespace Yesla.Driving
             // On auto the car backs in, unless it already faces the spot head-on and drives straight in.
             string mode = Config.Preferences.ParkDirection;
             bool reverse = !target.Kerb && mode != "forward";
-            if (reverse && mode == "auto" && HeadOn(car, target, out string headOn))
+            Vector3 at = Flat3(car.transform.position, target.Centre.y);
+            List<Vector3> arc = null;
+            if (!target.Kerb && (mode == "auto" || mode == "forward"))
+            {
+                arc = new List<Vector3>();
+                if (NoseInArc(car, target, at, car.transform.forward, arc, out string arcHow))
+                {
+                    if (reverse) Core.Log.Msg("[Park] auto: " + arcHow + " - parking nose first.");
+                    reverse = false;
+                }
+                else arc = null;
+            }
+            if (arc == null && reverse && mode == "auto" && HeadOn(car, target, out string headOn))
             {
                 reverse = false;
                 Core.Log.Msg("[Park] auto: " + headOn + " - parking nose first.");
@@ -375,6 +517,8 @@ namespace Yesla.Driving
             car.OverrideMaxSteerAngle(ParkLock);
             _tries = 0;
             _turns = 0;
+            _stageBackOffs = 0;
+            _stageBacking = false;
             _sameHits = 0;
             _lastHit = string.Empty;
             _steer = 0f;
@@ -385,9 +529,12 @@ namespace Yesla.Driving
             string towards = target.Label + " (" + Vector3.Distance(car.transform.position, target.Centre).ToString("F0") + " m)";
             if (target.Reverse)
             {
-                if (PlanReverse(car, target, pos))
+                if (PlanReverse(car, target, pos, false, out _))
                 {
                     Path.AddRange(StagePath);
+                    float run = 0f;
+                    for (int i = 1; i < Path.Count; i++) run += Flat(Path[i] - Path[i - 1]).magnitude;
+                    _stageBudget = 8f + run / (ApproachKmh / 3.6f) * 1.5f;
                     SetPhase(Phase.Stage, "past " + towards + (_swing > 1f ? ", swinging out " + _swing.ToString("F0") + " deg" : ", square to the aisle")
                              + " to stop " + Flat(_stage - target.Centre).magnitude.ToString("F1") + " m from it, then back on a " + _arc.ToString("F1") + " m arc");
                     return;
@@ -397,8 +544,22 @@ namespace Yesla.Driving
                 target.Reverse = false;
                 _dir = 1f;
             }
+            string line = "one forward arc";
+            if (arc == null && !target.Kerb)
+            {
+                var lane = new List<Vector3>();
+                if (NoseInLane(car, target, pos, lane, out string laneHow)) { arc = lane; line = "the lane along the aisle"; Core.Log.Msg("[Park] " + target.Label + ": " + laneHow + "."); }
+                else Core.Log.Msg("[Park] " + target.Label + ": " + laneHow + " - lining up on its axis.");
+            }
+            if (arc != null)
+            {
+                Path.Clear();
+                Path.AddRange(arc);
+                SetPhase(Phase.Approach, "towards " + towards + " on " + line);
+                return;
+            }
             if (target.Kerb) Path.Add(pos + target.Heading * 3f + Vector3.Cross(Vector3.up, target.Heading) * (KerbShift * 0.5f));
-            else Path.Add(target.Centre - target.Heading * FarOut);
+            else Path.Add(target.Centre - target.Heading * AxisRoom(car, target, FarOut));
             Path.Add(target.Centre);
             SetPhase(Phase.Approach, "towards " + towards);
         }
@@ -424,6 +585,168 @@ namespace Yesla.Driving
             return angle < HeadOnAngle && Mathf.Abs(aside) < HeadOnLateral && ahead > 2f && ahead < HandOver;
         }
 
+        /// <summary>A forward arc may start after this much straight ahead, and leaves at least this much straight into the spot.</summary>
+        private const float MaxStraightOn = 6f, NoseStraight = 1f;
+
+        /// <summary>
+        /// Nose first in one go from the car's real pose: d metres straight on, one circle onto the spot's axis, then
+        /// straight in. With u the way the car faces, n the way into the spot and theta the turn from u to n, the rear
+        /// axle P ends at E with lateral(E) = lateral(P) - s*r*(1 - cos theta), s the side of the turn, so r =
+        /// |lateral(P)| / (1 - cos theta) when the car is on the side it turns away from. A radius between full lock
+        /// and <see cref="MaxArc"/>, at least <see cref="NoseStraight"/> metres straight at the end, and a clear
+        /// run in the aisle make it; then a driver would simply drive in, and so does the car. Nearly square to the
+        /// spot already, the arc is the straight line itself. <paramref name="path"/> takes the car centres when given.
+        /// </summary>
+        private static bool NoseInArc(LandVehicle car, ParkTarget t, Vector3 pos, Vector3 forward, List<Vector3> path, out string how)
+        {
+            how = string.Empty;
+            Vector3 n = t.Into;
+            Vector3 hr = Vector3.Cross(Vector3.up, n);
+            Vector3 u = Flat(forward);
+            if (u.sqrMagnitude < 1e-4f) return false;
+            u.Normalize();
+            float y = t.Centre.y;
+            float theta = Vector3.SignedAngle(u, n, Vector3.up);
+            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            float half = Wheelbase * 0.5f;
+            float s = Mathf.Sign(theta);
+            float bend = 1f - Mathf.Cos(theta * Mathf.Deg2Rad);
+            for (float d = 0f; d <= MaxStraightOn; d += 0.5f)
+            {
+                Vector3 p = Flat3(pos - u * half + u * d, y);
+                float lat = Vector3.Dot(p - t.Centre, hr);
+                Vector3 c = default, e;
+                float r = 0f;
+                if (Mathf.Abs(theta) < HeadOnAngle * 0.4f)
+                {
+                    // Already square: straight in when the car is on the axis.
+                    if (Mathf.Abs(lat) > HeadOnLateral * 0.5f) return false;
+                    e = p;
+                }
+                else
+                {
+                    if (Mathf.Abs(theta) > 100f || Mathf.Sign(lat) != s || Mathf.Abs(lat) < 0.05f) continue;
+                    r = Mathf.Abs(lat) / bend;
+                    if (r < rMin || r > MaxArc) continue;
+                    c = p + Vector3.Cross(Vector3.up, u) * (s * r);
+                    e = c - hr * (s * r);
+                }
+                float straight = Vector3.Dot(t.Centre - (e + n * half), n);
+                if (straight < NoseStraight) continue;
+
+                var line = path ?? new List<Vector3>();
+                line.Clear();
+                line.Add(Flat3(pos, y));
+                if (d > 0.1f) line.Add(Flat3(pos + u * d, y));
+                if (r > 0f)
+                {
+                    int steps = Mathf.Max(3, Mathf.CeilToInt(Mathf.Abs(theta) / 10f));
+                    for (int i = 1; i <= steps; i++)
+                    {
+                        Vector3 facing = Quaternion.AngleAxis(theta * i / steps, Vector3.up) * u;
+                        Vector3 rear = c - Vector3.Cross(Vector3.up, facing) * (s * r);
+                        line.Add(Flat3(rear + facing * half, y));
+                    }
+                }
+                line.Add(t.Centre);
+                // The aisle part must be clear; the last stretch is the spot itself, which Free already checked.
+                bool clear = true;
+                for (int i = 1; i < line.Count - 1 && clear; i++)
+                    clear = Corridor(car, line[i - 1], line[i], out string what) && !KerbOnRun(car, line[i - 1], line[i], out what);
+                if (!clear) continue;
+                how = r > 0f
+                    ? "one forward arc fits: " + d.ToString("F1") + " m straight on, radius " + r.ToString("F1") + " m, " + Mathf.Abs(theta).ToString("F0") + " deg, " + straight.ToString("F1") + " m straight in"
+                    : "square to " + t.Label + ", " + Mathf.Abs(lat).ToString("F1") + " m off its axis";
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>The lane may take a turn this much wider than full lock; the car runs straight this far before it turns.</summary>
+        private const float LaneArcSpare = 2f, LaneRunIn = 3f;
+
+        /// <summary>
+        /// Nose first from the lot's entry along the aisle, the way a driver takes a spot where the aisle is too
+        /// narrow to swing out and back in: straight along a lane, a quarter circle of radius r onto the spot's axis,
+        /// then <see cref="NoseStraight"/> metres straight in. With a the way along the aisle and n the way into the
+        /// spot, the lane runs w = r + wheelbase/2 + NoseStraight out from the spot's centre, and the rear axle turns
+        /// round C = centre - n·(w - r) - a·r. The tightest lane that is clear wins, so the car keeps away from the
+        /// far side of the aisle; <paramref name="path"/> takes the car centres when given.
+        /// </summary>
+        private static bool NoseInLane(LandVehicle car, ParkTarget t, Vector3 pos, List<Vector3> path, out string how)
+        {
+            how = string.Empty;
+            Vector3 n = t.Into;
+            Vector3 side = Vector3.Cross(Vector3.up, n);
+            float y = t.Centre.y;
+            float half = Wheelbase * 0.5f;
+            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            Vector3 from = t.Lot != null && t.Lot.EntryPoint != null ? t.Lot.EntryPoint.position : pos;
+            float across = Vector3.Dot(Flat(t.Centre - from), side);
+            Vector3 facingNow = Flat(car.transform.forward).normalized;
+            string blocked = null;
+            // The car comes along the aisle from the entry; right in front of the spot, either way may do.
+            int ways = Mathf.Abs(across) < 1f ? 2 : 1;
+            for (int way = 0; way < ways; way++)
+            {
+                Vector3 a = (across >= 0f) == (way == 0) ? side : -side;
+                if (Vector3.Dot(facingNow, a) < -0.5f) { blocked ??= "the car faces the other way along the aisle"; continue; }
+                for (float r = rMin + LaneArcSpare; r >= rMin - 0.01f; r -= 0.5f)
+                {
+                    float w = r + half + NoseStraight;
+                    Vector3 cross = t.Centre - n * w;
+                    Vector3 c = cross - a * r + n * r;
+                    Vector3 arcStart = Flat3(cross - a * r + a * half, y);
+                    if (Vector3.Dot(Flat(pos - arcStart), a) > -0.5f) { blocked ??= "the car is already past the turn"; continue; }
+                    float s0 = Mathf.Min(Vector3.Dot(Flat(from - t.Centre), a), -r + half - LaneRunIn);
+                    Vector3 runIn = Flat3(cross + a * s0, y);
+                    var line = path ?? new List<Vector3>();
+                    line.Clear();
+                    line.Add(Flat3(pos, y));
+                    if (Vector3.Dot(Flat(pos - runIn), a) < 0f) line.Add(runIn);
+                    line.Add(arcStart);
+                    for (int i = 1; i <= 9; i++)
+                    {
+                        float phi = 10f * i * Mathf.Deg2Rad;
+                        Vector3 rear = c - n * (r * Mathf.Cos(phi)) + a * (r * Mathf.Sin(phi));
+                        line.Add(Flat3(rear + (a * Mathf.Cos(phi) + n * Mathf.Sin(phi)) * half, y));
+                    }
+                    line.Add(t.Centre);
+                    bool clear = true;
+                    string what = string.Empty;
+                    for (int i = 1; i < line.Count - 1 && clear; i++)
+                        clear = Corridor(car, line[i - 1], line[i], out what) && !KerbOnRun(car, line[i - 1], line[i], out what);
+                    for (int i = 0; i * 10f < OutlineUpTo && clear; i++)
+                    {
+                        // The turn's first part, out in the aisle; its last part is the spot's mouth.
+                        float phi = 10f * i * Mathf.Deg2Rad;
+                        Vector3 rear = c - n * (r * Mathf.Cos(phi)) + a * (r * Mathf.Sin(phi));
+                        Vector3 f = a * Mathf.Cos(phi) + n * Mathf.Sin(phi);
+                        clear = Outline(car, Flat3(rear + f * half, y), f, out what);
+                    }
+                    if (!clear) { blocked ??= what; continue; }
+                    how = "no room to back in, nose first along the aisle: a " + r.ToString("F1") + " m turn from a lane " + w.ToString("F1") + " m out";
+                    return true;
+                }
+            }
+            how = "no lane along the aisle (" + (blocked ?? "nothing tried") + ")";
+            return false;
+        }
+
+        /// <summary>
+        /// How far out on the spot's axis the car can line up, up to <paramref name="want"/>: a wall across a
+        /// narrow aisle ends the run before it, and a line-up point behind that wall drives the car into it.
+        /// </summary>
+        private static float AxisRoom(LandVehicle car, ParkTarget t, float want, bool quiet = false)
+        {
+            Vector3 n = t.Into;
+            float tail = car.BoundingBoxDimensions.z * 0.5f;
+            for (float d = want; d > 2f; d -= 0.5f)
+                if (Corridor(car, t.Centre - n * 2f, t.Centre - n * (d + tail), out _)) return d;
+            if (!quiet) Core.Log.Msg("[Park] " + t.Label + ": less than 2 m clear in front of it - lining up right at the spot.");
+            return 2f;
+        }
+
         /// <summary>
         /// Backing in the way a driver does it: past the spot on <see cref="PassLine"/>, a swing away from the spot,
         /// then back on an arc until the car faces out of the spot, and the last <see cref="StraightIn"/> metres
@@ -436,8 +759,16 @@ namespace Yesla.Driving
         /// wins.
         /// Of the two ways along the aisle it takes the one the car is heading, unless no stop point is free there.
         /// </summary>
-        private static bool PlanReverse(LandVehicle car, ParkTarget target, Vector3 pos)
+        private static bool PlanReverse(LandVehicle car, ParkTarget target, Vector3 pos, bool quiet, out string firstBlock)
         {
+            firstBlock = string.Empty;
+            float room = AxisRoom(car, target, MinReverseRoom + 1f, true);
+            if (room < MinReverseRoom)
+            {
+                firstBlock = "an aisle only " + room.ToString("F1") + " m deep in front of it (" + MinReverseRoom.ToString("F0") + " m needed to swing out)";
+                if (!quiet) Core.Log.Msg("[Park] backing into " + target.Label + ": " + firstBlock + ".");
+                return false;
+            }
             Vector3 h = target.Heading;
             Vector3 side = Vector3.Cross(Vector3.up, h);
             float y = target.Centre.y;
@@ -449,10 +780,12 @@ namespace Yesla.Driving
             {
                 Vector3 a = sideFirst == (pass == 0) ? side : -side;
                 string blocked = null;
-                for (int k = 0; k <= SwingRadii.Length; k++)
+                for (int k = 0; k < (SwingRadii.Length + 1) * PassLines.Length; k++)
                 {
-                    float r = k < SwingRadii.Length ? SwingRadii[k] : rMin;
-                    float cos = Mathf.Min(1f, (PassLine + r - eh) / (2f * r));
+                    int ri = k / PassLines.Length;
+                    float r = ri < SwingRadii.Length ? SwingRadii[ri] : rMin;
+                    float line = PassLines[k % PassLines.Length];
+                    float cos = Mathf.Min(1f, (line + r - eh) / (2f * r));
                     float psi = Mathf.Acos(cos), sin = Mathf.Sin(psi);
                     Vector3 c = end + a * r;
                     Vector3 stopRear = c + (h * cos - a * sin) * r;
@@ -475,9 +808,26 @@ namespace Yesla.Driving
                     }
                     StagePath.Add(stop + facing * StageRunOut);
                     // The car drives this whole line, front bumper first; a fence across the aisle shows here.
-                    bool clear = true;
+                    // From where the car stands to the start of the line, then the line itself.
+                    bool clear = Corridor(car, pos, StagePath[0], out what) && !KerbOnRun(car, pos, StagePath[0], out what);
                     for (int i = 1; i < StagePath.Count && clear; i++)
-                        clear = Corridor(car, StagePath[i - 1], StagePath[i], out what);
+                        clear = Corridor(car, StagePath[i - 1], StagePath[i], out what) && !KerbOnRun(car, StagePath[i - 1], StagePath[i], out what);
+                    // The strips miss the outer front corner on the turn: the outline at each pose of the swing and of
+                    // the backing arc up to the spot's mouth.
+                    for (int i = 0; i <= steps && clear; i++)
+                    {
+                        float t = psi * i / steps;
+                        Vector3 rear = startRear + a * (r * Mathf.Sin(t)) + h * (r * (1f - Mathf.Cos(t)));
+                        Vector3 f = a * Mathf.Cos(t) + h * Mathf.Sin(t);
+                        clear = Outline(car, Flat3(rear + f * (Wheelbase * 0.5f), y), f, out what);
+                    }
+                    for (float deg = psi * Mathf.Rad2Deg; deg < OutlineUpTo && clear; deg += 10f)
+                    {
+                        float phi = deg * Mathf.Deg2Rad;
+                        Vector3 rear = c + (h * Mathf.Cos(phi) - a * Mathf.Sin(phi)) * r;
+                        Vector3 f = h * Mathf.Sin(phi) + a * Mathf.Cos(phi);
+                        clear = Outline(car, Flat3(rear + f * (Wheelbase * 0.5f), y), f, out what);
+                    }
                     if (!clear) { blocked ??= what; continue; }
 
                     ReversePath.Clear();
@@ -494,10 +844,11 @@ namespace Yesla.Driving
                     _stageFacing = facing;
                     _swing = psi * Mathf.Rad2Deg;
                     _arc = r;
-                    if (blocked != null) Core.Log.Msg("[Park] backing into " + target.Label + ": a wider swing is blocked by " + blocked + ", taking a " + r.ToString("F1") + " m arc.");
+                    if (blocked != null && !quiet) Core.Log.Msg("[Park] backing into " + target.Label + ": a wider swing or a closer pass is blocked by " + blocked + ", taking a " + r.ToString("F1") + " m arc passing " + line.ToString("F1") + " m out.");
                     return true;
                 }
-                Core.Log.Msg("[Park] backing into " + target.Label + (pass == 0 ? " from this side" : " from the other side") + ": every stop point is blocked, first by " + blocked + ".");
+                if (firstBlock.Length == 0 && blocked != null) firstBlock = blocked;
+                if (!quiet) Core.Log.Msg("[Park] backing into " + target.Label + (pass == 0 ? " from this side" : " from the other side") + ": every stop point is blocked, first by " + blocked + ".");
             }
             return false;
         }
@@ -587,6 +938,7 @@ namespace Yesla.Driving
             if (_car == null) return;
             Core.Log.Msg("[Park] cancelled: " + why + ".");
             _car.ResetMaxSteerAngle();
+            _car.handbrakeOverride = false;
             _car = null;
             _target = null;
             _done = null;
@@ -607,6 +959,7 @@ namespace Yesla.Driving
                 car.throttleOverride = 0f;
                 car.steerOverride = 0f;
                 car.ResetMaxSteerAngle();
+                car.handbrakeOverride = false;
                 if (ok && !t.Kerb) Net.Remote.TakeSpot(car, t);
             }
             done?.Invoke(ok, why);
@@ -620,6 +973,7 @@ namespace Yesla.Driving
             _blockedFor = 0f;
             _stillFor = 0f;
             _stuckFor = 0f;
+            _nudge = 0f;
         }
 
         /// <summary>Called from OnLateUpdate, after vanilla's agent, which no longer drives this car.</summary>
@@ -650,6 +1004,23 @@ namespace Yesla.Driving
             {
                 case Phase.Stage:
                 {
+                    if (_stageBacking)
+                    {
+                        float backed = Flat(pos - _backFrom).magnitude;
+                        bool behind = Blocked(car, -fwd, Mathf.Max(0f, -v), out string back, out _, out _);
+                        if (backed < StageBackOff && _blockedFor < 4f && !behind)
+                        {
+                            // The clock stands while the car makes room; the stop point is no nearer.
+                            _phaseTime -= dt;
+                            _blockedFor += dt;
+                            Drive(car, v, -ReverseKmh, dt);
+                            Steer(car, -Pursuit(pos, fwd, 1f), dt);
+                            break;
+                        }
+                        _stageBacking = false;
+                        _blockedFor = 0f;
+                        Core.Log.Msg("[Park] Stage: backed " + backed.ToString("F1") + " m" + (behind ? ", stopped by " + back : "") + ", aiming " + Mathf.Abs(_nudge).ToString("F1") + " m to the " + (_nudge > 0f ? "left" : "right") + " of the line.");
+                    }
                     float left = Remaining(pos);
                     // At the stop point and at the swing's angle; still turning in from the road is not there yet,
                     // and the arc from the real pose takes up any distance driven past it.
@@ -657,19 +1028,45 @@ namespace Yesla.Driving
                     float offLine = Vector3.Dot(Flat(pos - _stage), Vector3.Cross(Vector3.up, _stageFacing));
                     bool past = beyond > -0.4f && Vector3.Dot(fwd, _stageFacing) > StageSquare && Mathf.Abs(offLine) < StageOffLine;
                     bool overshot = beyond > StageRunOut - 0.5f;
-                    if (past || overshot || left < 1f || _phaseTime > 15f)
+                    if (!past && !overshot && left >= 1f && _phaseTime > _stageBudget && Flat(_stage - pos).magnitude > StageSteerAround)
                     {
-                        StartIn(pos, past ? "stopped past the spot" : overshot || left < 1f ? "at the end of the aisle line, " + offLine.ToString("F1") + " m beside it" : "still not past the spot after 15 s");
+                        Retarget(car, "the way to the stop point " + Flat(_stage - pos).magnitude.ToString("F1") + " m");
                         break;
                     }
-                    if (Blocked(car, fwd, Mathf.Max(0f, v), out string ahead, out bool aheadMoving))
+                    if (past || overshot || left < 1f || _phaseTime > _stageBudget)
                     {
-                        if (!aheadMoving) { StartIn(pos, ahead + " ahead"); break; }
+                        StartIn(pos, past ? "stopped past the spot" : overshot || left < 1f ? "at the end of the aisle line, " + offLine.ToString("F1") + " m beside it" : "still not past the spot after " + _stageBudget.ToString("F0") + " s");
+                        break;
+                    }
+                    if (Blocked(car, fwd, Mathf.Max(0f, v), out string ahead, out bool aheadMoving, out int aheadSide))
+                    {
+                        float toStop = Flat(_stage - pos).magnitude;
+                        if (!aheadMoving && toStop <= StageSteerAround) { StartIn(pos, ahead + " ahead"); break; }
+                        if (!aheadMoving)
+                        {
+                            // Still on the way to the stop point: the wheels turn away from the post while the car
+                            // stands, and the next sweep runs on the new steering. A post that stays in the way gives
+                            // the spot up rather than backing in from the wrong place.
+                            if (aheadSide != 0) _nudge = aheadSide * StageNudge;
+                            _phaseTime -= dt;
+                            Hold(car, v, dt, ahead);
+                            Steer(car, Pursuit(pos, fwd, 1f), dt);
+                            if (_blockedFor < 1f) break;
+                            if (_stageBackOffs >= StageBackOffs) { Retarget(car, ahead); break; }
+                            _stageBackOffs++;
+                            _stageBacking = true;
+                            _backFrom = pos;
+                            _blockedFor = 0f;
+                            Core.Log.Msg("[Park] Stage: " + ahead + ", " + toStop.ToString("F1") + " m before the stop point - backing " + StageBackOff.ToString("F0") + " m to get round it (" + _stageBackOffs + " of " + StageBackOffs + ").");
+                            break;
+                        }
                         Hold(car, v, dt, ahead);
                         if (_blockedFor > BlockedGiveUp) Finish(false, "blocked by " + ahead);
                         break;
                     }
                     _blockedFor = 0f;
+                    // Past the post the aim drifts back onto the stage line, so the stop point is reached on it.
+                    _nudge = Mathf.MoveTowards(_nudge, 0f, StageNudgeRate * 0.25f * dt);
                     _stuckFor = Mathf.Abs(v) < 0.5f && car.throttleOverride > 0.25f ? _stuckFor + dt : 0f;
                     if (_stuckFor > 2.5f) { StartIn(pos, "not moving with the throttle on"); break; }
                     Drive(car, v, left < 3f ? CreepKmh : ApproachKmh, dt);
@@ -683,13 +1080,16 @@ namespace Yesla.Driving
                     {
                         // Past the spot or beside it is not parked, however many tries it took.
                         bool there = along > -MissedBy && Mathf.Abs(lat) < MissedBy;
-                        if (there && (_target.Kerb || (Mathf.Abs(lat) <= GoodLateral && Mathf.Abs(heading) <= GoodHeading) || _tries >= MaxTries))
+                        bool fair = Mathf.Abs(lat) <= GoodLateral * 2f && Mathf.Abs(heading) <= GoodHeading * 2f;
+                        if (there && (_target.Kerb || (Mathf.Abs(lat) <= GoodLateral && Mathf.Abs(heading) <= GoodHeading) || (_tries >= MaxTries && fair)))
                         {
                             SetPhase(Phase.Settle, "in place, " + Pose());
                             break;
                         }
                         if (_tries >= MaxTries)
                         {
+                            // Standing in the spot at an angle is not parked; another spot nearby may suit the car.
+                            if (!_target.Kerb) { Retarget(car, "no straight way in after " + MaxTries + " tries (" + Pose() + ")"); break; }
                             Finish(false, "missed the spot (" + Pose() + ")");
                             break;
                         }
@@ -704,7 +1104,7 @@ namespace Yesla.Driving
                         StartBack(pos, Mathf.Abs(heading) > SwingHeading, "too far off the spot's axis (" + Pose() + "), backing out for try " + (_tries + 1));
                         break;
                     }
-                    if (Blocked(car, travel, Mathf.Max(0f, vIn), out string what, out bool moving))
+                    if (Blocked(car, travel, Mathf.Max(0f, vIn), out string what, out bool moving, out _))
                     {
                         // A parked car or a wall right at the end of the spot: as far in as it goes.
                         if (!moving && onAxis && along < 2f)
@@ -745,14 +1145,14 @@ namespace Yesla.Driving
                 {
                     bool aligned = Mathf.Abs(lat) < OnAxisLateral && Mathf.Abs(heading) < OnAxisHeading;
                     bool far = _turning ? Flat(pos - _backFrom).magnitude >= TurnBack : along >= BackTo && (aligned || along >= BackTo + AlignExtra);
-                    if (far || _phaseTime > 9f || Blocked(car, -travel, Mathf.Max(0f, -vIn), out _, out _))
+                    if (far || _phaseTime > 9f || Blocked(car, -travel, Mathf.Max(0f, -vIn), out _, out _, out _))
                     {
                         Path.Clear();
                         string how = "";
                         if (!_target.Reverse || !ArcFrom(pos, fwd, out how))
                         {
                             if (_target.Reverse) how = "; " + how + ", lining up on the axis";
-                            Path.Add(_target.Centre - into * (_target.Reverse ? ReverseLineUp : FarOut));
+                            Path.Add(_target.Centre - into * (_target.Reverse ? ReverseLineUp : AxisRoom(car, _target, FarOut)));
                             Path.Add(_target.Centre);
                         }
                         else how = "; " + how;
@@ -769,7 +1169,11 @@ namespace Yesla.Driving
                 case Phase.Settle:
                 {
                     Steer(car, 0f, dt);
-                    car.throttleOverride = Mathf.Abs(v) > 0.5f ? -Mathf.Sign(v) * 0.6f : 0f;
+                    // No throttle against the motion: below 4 km/h vanilla drives that throttle the other way, and the
+                    // car rocked back and forth. Vanilla also clears handbrakeOverride in its own LateUpdate, so the
+                    // brake is applied to the body directly, as hard as a firm stop.
+                    car.throttleOverride = 0f;
+                    Brake(car, dt);
                     _stillFor = Mathf.Abs(v) < 0.3f ? _stillFor + dt : 0f;
                     if (_stillFor > 0.3f || _phaseTime > 4f) Finish(true, Pose() + (_tries > 0 ? ", " + (_tries + 1) + " tries" : ""));
                     break;
@@ -788,6 +1192,8 @@ namespace Yesla.Driving
 
         private static string Key(string what)
         {
+            // The distance at the end ("... 1.5 m") changes every frame; anything else is the thing itself.
+            if (!what.EndsWith(" m")) return what;
             int cut = what.LastIndexOf(' ');
             cut = cut > 0 ? what.LastIndexOf(' ', cut - 1) : -1;
             return cut > 0 ? what.Substring(0, cut) : what;
@@ -850,6 +1256,20 @@ namespace Yesla.Driving
             return "short " + along.ToString("F2") + " m, aside " + lat.ToString("F2") + " m, turned " + heading.ToString("F0") + " deg";
         }
 
+        /// <summary>How hard the car stops in the spot, in m/s per second.</summary>
+        private const float SettleBrake = 6f;
+
+        private static void Brake(LandVehicle car, float dt)
+        {
+            Rigidbody rb = car.Rb;
+            if (rb == null) { Core.Log.Warning("[Park] no rigidbody to brake - the car rolls out."); return; }
+            Vector3 vel = rb.velocity;
+            Vector3 flat = Flat(vel);
+            flat = Vector3.MoveTowards(flat, Vector3.zero, SettleBrake * dt);
+            rb.velocity = new Vector3(flat.x, vel.y, flat.z);
+            rb.angularVelocity = Vector3.MoveTowards(rb.angularVelocity, Vector3.zero, SettleBrake * dt);
+        }
+
         private static void Hold(LandVehicle car, float v, float dt, string what)
         {
             // The distance at the end of what changes every frame; the thing itself is what gets logged once.
@@ -887,8 +1307,9 @@ namespace Yesla.Driving
             Vector3 rear = pos - fwd * (Wheelbase * 0.5f);
             Vector3 travel = fwd * dir;
             Vector3 aim = AimPoint(pos);
-            Vector3 d = Flat(aim - rear);
             Vector3 right = Vector3.Cross(Vector3.up, travel);
+            if (_nudge != 0f) aim -= Vector3.Cross(Vector3.up, Flat(fwd)) * _nudge;
+            Vector3 d = Flat(aim - rear);
             float x = Vector3.Dot(d, right), z = Vector3.Dot(d, travel);
             // Aim point behind the way the car moves: full lock towards its side, pursuit alone would barely turn.
             if (z < 0f) return dir * (x < 0f ? -1f : 1f) * 45f;
@@ -942,7 +1363,7 @@ namespace Yesla.Driving
         /// is driven over, a post or a bumper is not. <paramref name="moving"/> is true for a car that drives or has
         /// someone in it, an NPC or a player, which is worth waiting for; a parked car or a plant box is not.
         /// </summary>
-        private static bool Blocked(LandVehicle car, Vector3 dir, float kmh, out string what, out bool moving)
+        private static bool Blocked(LandVehicle car, Vector3 dir, float kmh, out string what, out bool moving, out int side)
         {
             what = string.Empty;
             moving = false;
@@ -950,8 +1371,8 @@ namespace Yesla.Driving
             // out and the inner side cuts in, where a straight cast from the bumper saw no hydrant or post.
             float sign = Vector3.Dot(dir, car.transform.forward) >= 0f ? 1f : -1f;
             float reach = 0.6f + kmh / 3.6f * 0.6f;
-            if (!Footprint.Sweep(car, sign, reach, out float at, out int side, out Collider c, out string name)) return false;
-            what = name + " " + at.ToString("F1") + " m" + (side < 0 ? " at the left" : side > 0 ? " at the right" : "");
+            if (!Footprint.Sweep(car, sign, reach, out float at, out side, out Collider c, out string name)) return false;
+            what = name + (side < 0 ? " at the left" : side > 0 ? " at the right" : "") + " " + at.ToString("F1") + " m";
             LandVehicle other = c.GetComponentInParent<LandVehicle>();
             if (other != null) moving = other.IsOccupied || (other.Rb != null && other.Rb.velocity.sqrMagnitude > 0.25f);
             else moving = c.attachedRigidbody != null
@@ -960,7 +1381,11 @@ namespace Yesla.Driving
             return true;
         }
 
-        /// <summary>The ground height under the car, skipping the car's own colliders.</summary>
+        /// <summary>
+        /// The ground height under the car, skipping the car's own colliders, people, and anything above
+        /// <paramref name="pos"/>: a car's pivot stands above its floor, and the player sitting in the car has a collider
+        /// of its own that is no child of the car.
+        /// </summary>
         internal static float Ground(LandVehicle car, Vector3 pos)
         {
             float best = pos.y - 0.5f, bestD = float.MaxValue;
@@ -969,6 +1394,9 @@ namespace Yesla.Driving
             {
                 Collider c = hits[i].collider;
                 if (c == null || c.transform.IsChildOf(car.transform) || c.attachedRigidbody != null) continue;
+                if (hits[i].point.y > pos.y + 0.1f) continue;
+                if (c.GetComponentInParent<Il2CppScheduleOne.PlayerScripts.Player>() != null
+                    || c.GetComponentInParent<Il2CppScheduleOne.NPCs.NPC>() != null) continue;
                 if (hits[i].distance < bestD) { bestD = hits[i].distance; best = hits[i].point.y; }
             }
             return best;
@@ -1024,6 +1452,80 @@ namespace Yesla.Driving
             }
             if (gone != null) foreach (IntPtr k in gone) Held.Remove(k);
         }
+
+#if DEBUG
+        /// <summary>
+        /// The lot nearest <paramref name="near"/> as numbers: its entry, each spot as the car would take it, and the
+        /// static colliders around it with their bounds, to read a lot's layout without a picture.
+        /// </summary>
+        internal static string MapLot(LandVehicle car, Vector3 near, float radius)
+        {
+            ParkingLot best = null;
+            float bestD = float.MaxValue;
+            foreach (ParkingLot lot in AllLots())
+            {
+                if (lot == null || lot.ParkingSpots == null) continue;
+                for (int i = 0; i < lot.ParkingSpots.Count; i++)
+                {
+                    ParkingSpot s = lot.ParkingSpots[i];
+                    if (s == null || s.AlignmentPoint == null) continue;
+                    float d = Flat(s.AlignmentPoint.position - near).magnitude;
+                    if (d < bestD) { bestD = d; best = lot; }
+                }
+            }
+            if (best == null) return "lotmap: no lot";
+            var sb = new System.Text.StringBuilder();
+            sb.Append("lotmap ").Append(best.gameObject.name).Append(" at ").Append(best.transform.position.ToString("F1"));
+            if (best.EntryPoint != null) sb.Append(" entry ").Append(best.EntryPoint.position.ToString("F1")).Append(" facing ").Append(Flat(best.EntryPoint.forward).ToString("F2"));
+            Vector3 mid = Vector3.zero;
+            int n = 0;
+            for (int i = 0; i < best.ParkingSpots.Count; i++)
+            {
+                ParkingSpot s = best.ParkingSpots[i];
+                if (s == null || s.AlignmentPoint == null) continue;
+                ParkTarget t = ForSpot(car, best, i, s);
+                bool free = Free(car, t, out string what);
+                sb.Append("\n  #").Append(i).Append(" centre ").Append(t.Centre.ToString("F1")).Append(" heading ").Append(t.Heading.ToString("F2"))
+                  .Append(free ? " free" : " blocked by " + what);
+                mid += t.Centre;
+                n++;
+            }
+            if (n > 0) mid /= n;
+            float floor = Ground(car, mid + Vector3.up);
+            var seen = new HashSet<IntPtr>();
+            var hits = Physics.OverlapSphere(mid, radius, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            int listed = 0;
+            for (int i = 0; i < hits.Length && listed < 200; i++)
+            {
+                Collider c = hits[i];
+                if (c == null || c.attachedRigidbody != null || !seen.Add(c.Pointer)) continue;
+                Bounds b = c.bounds;
+                // What a car can touch: from the kerb to the roof, not the floors above.
+                if (b.size.x > 30f || b.size.z > 30f || b.max.y < floor + 0.1f || b.min.y > floor + 1.6f) continue;
+                Transform up = c.transform.parent;
+                sb.Append("\n  obj ").Append(up != null ? up.name + "/" : "").Append(c.name)
+                  .Append(" c ").Append(b.center.ToString("F1")).Append(" s ").Append(b.size.ToString("F1"));
+                listed++;
+            }
+            // Ground height around the lot in decimetres above its floor, one cell per metre, rows from north to south;
+            // a jump of two or more between neighbours is a kerb.
+            int half = Mathf.CeilToInt(radius);
+            sb.Append("\n  ground dm above ").Append(floor.ToString("F2")).Append(", x from ").Append((Mathf.Round(mid.x) - half).ToString("F0"))
+              .Append(" to ").Append((Mathf.Round(mid.x) + half).ToString("F0")).Append(", z from ").Append((Mathf.Round(mid.z) + half).ToString("F0")).Append(" down");
+            for (int dz = half; dz >= -half; dz--)
+            {
+                sb.Append("\n  z ").Append((Mathf.Round(mid.z) + dz).ToString("F0")).Append(":");
+                for (int dx = -half; dx <= half; dx++)
+                {
+                    var p = new Vector3(Mathf.Round(mid.x) + dx, floor + 3f, Mathf.Round(mid.z) + dz);
+                    if (!GroundAt(car, p, out float h)) { sb.Append("  ."); continue; }
+                    int dm = Mathf.RoundToInt((h - floor) * 10f);
+                    sb.Append(dm > 99 ? " ##" : dm.ToString().PadLeft(3));
+                }
+            }
+            return sb.ToString();
+        }
+#endif
 
         internal static string DescribeLots(Vector3 near, float radius)
         {

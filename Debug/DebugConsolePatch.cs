@@ -91,6 +91,7 @@ namespace Yesla.Debugging
                         Say("profile [chill|standard|madmax] - show or set the drive profile (same as the phone)");
                         Say("zones              - every speed zone with its speed and size");
                         Say("accel / phone [close] - full-throttle run with a speed trace / open the phone the way its key does");
+                        Say("jitter [seconds] - frame times, physics steps and position jumps of the car you sit in");
                         break;
 
                     case "state":
@@ -301,6 +302,14 @@ namespace Yesla.Debugging
                         Say(AccelTest.Start(Autopilot.CurrentCar()));
                         break;
 
+                    case "jitter":
+                    {
+                        float secs = 20f;
+                        if (parts.Length > 2 && !float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out secs)) { Say("jitter: '" + parts[2] + "' is not a number of seconds."); break; }
+                        Say(JitterProbe.Start(Autopilot.CurrentCar(), secs));
+                        break;
+                    }
+
                     case "profile":
                         if (parts.Length > 2 && DriveProfile.Select(parts[2]) == null) { Say("profile: unknown '" + parts[2] + "' - chill, standard or madmax."); break; }
                         Say("profile: " + DriveProfile.Current.Label + " (" + DriveProfile.Current.Id + ")"
@@ -368,6 +377,20 @@ namespace Yesla.Debugging
                         float radius = 120f;
                         if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out radius);
                         Say(Parking.DescribeLots(Player.Local.transform.position, radius));
+                        break;
+                    }
+
+                    case "lotmap":
+                    {
+                        // 'lotmap [x z] [radius]': the lot nearest the point (or the player) as numbers.
+                        LandVehicle car = Autopilot.CurrentCar();
+                        if (car == null) { Say("lotmap: sit in a car first, the spots are measured for it"); break; }
+                        Vector3 at = Player.Local.transform.position;
+                        float r = 18f;
+                        if (parts.Length > 3 && float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float x)
+                            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float z)) at = new Vector3(x, at.y, z);
+                        if (parts.Length > 4) float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out r);
+                        Say(Parking.MapLot(car, at, r));
                         break;
                     }
 

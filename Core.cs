@@ -78,6 +78,7 @@ namespace Yesla
             Vehicle.Fleet.Reset();
             Vehicle.Plate.Reset();
             DestinationMarker.Reset();
+            Vehicle.Indicators.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
             Visual.Viz.Reset();
@@ -88,6 +89,7 @@ namespace Yesla
         {
             if (!_inWorld) return;
 #if DEBUG
+            Debugging.JitterProbe.Own.Start();
             Debugging.ConsoleRegistration.EnsureRegistered();
             Debugging.DebugConsolePatch.FlushToConsole();
 #endif
@@ -97,16 +99,23 @@ namespace Yesla
             if (Net.YeslaNet.IsHost) Parking.HostTick();
             Vehicle.Sentry.Tick();
             Vehicle.Plate.Tick();
+            Vehicle.Indicators.Tick();
             DestinationMarker.Tick();
             FirstPerson.Tick();
             Visual.Viz.Tick();
             KeyHint.Tick();
             Phone.YeslaApp.Tick();
+#if DEBUG
+            Debugging.JitterProbe.Own.Stop();
+#endif
         }
 
         public override void OnLateUpdate()
         {
             if (!_inWorld) return;
+#if DEBUG
+            Debugging.JitterProbe.Own.Start();
+#endif
             // After VehicleAgent.LateUpdate has written its overrides; reads the driver's own input for a takeover.
             Autopilot.LateTick();
             Parking.LateTick();
@@ -114,6 +123,8 @@ namespace Yesla
             Visual.Viz.LateTick();
 #if DEBUG
             Debugging.AccelTest.LateTick();
+            Debugging.JitterProbe.Own.Stop();
+            Debugging.JitterProbe.LateTick();
 #endif
         }
     }

@@ -37,6 +37,8 @@ namespace Yesla.Driving
 
         /// <summary>The car Assisted Driving is steering right now, or null.</summary>
         internal static LandVehicle DrivenCar => Active ? _car : null;
+        /// <summary>The lot spot the drive ends in, while the road AI is still on the way; null for a kerb or none.</summary>
+        internal static ParkTarget LotSpotAhead => Active && State == DriveState.Driving && _park != null && !_park.Kerb ? _park : null;
 
         /// <summary>Input above this on any axis counts as the driver taking over.</summary>
         private const float TakeoverThreshold = 0.5f;

@@ -35,6 +35,17 @@ namespace Yesla.Visual
         private static readonly List<Vector3> Strip = new List<Vector3>();
 
         private static readonly List<Vector3> Pts = new List<Vector3>();
+        /// <summary>How far the car is along the road AI's path from its first point; the turn samples sit on a grid
+        /// counted from there, so they stay put on the road while the car moves.</summary>
+        private static float _carAlong;
+
+        /// <summary>A different next step shows once it has been found this long in a row.</summary>
+        private const float SwitchAfter = 0.75f;
+        /// <summary>The shown turn still counts as on the path within this many metres of it.</summary>
+        private const float OnPath = 4f;
+        private static NextStep _shown, _pending;
+        private static Vector3 _shownAt, _pendingAt;
+        private static float _pendingSince;
 
         internal static VizInfo Update(LandVehicle car, Mesh band, float ahead, float width, Transform pin)
         {
@@ -50,6 +61,9 @@ namespace Yesla.Visual
             {
                 Vector3 pos = car.transform.position;
                 int seg = Closest(vp, pos, out float t);
+                _carAlong = 0f;
+                for (int i = 0; i < seg; i++) _carAlong += VizScene.Flat(vp[i + 1] - vp[i]).magnitude;
+                _carAlong += VizScene.Flat(vp[seg + 1] - vp[seg]).magnitude * t;
                 Pts.Add(Vector3.Lerp(vp[seg], vp[seg + 1], t));
                 for (int i = seg + 1; i < vp.Count; i++) Pts.Add(vp[i]);
             }
@@ -155,30 +169,90 @@ namespace Yesla.Visual
             }
         }
 
-        /// <summary>Walks the path in 5 m steps and finds the first bend sharp enough to call a turn.</summary>
+        private static readonly List<Vector3> Samples = new List<Vector3>();
+
+        /// <summary>
+        /// Walks the path in 5 m steps and finds the first bend sharp enough to call a turn, then holds what is shown
+        /// until a different answer has stood for <see cref="SwitchAfter"/>: a bend right at the 40 degree line, or a
+        /// path the road AI recalculates, otherwise flips the arrow from frame to frame.
+        /// </summary>
         private static void NextTurn(ref VizInfo info, float total)
         {
-            info.Next = NextStep.None;
+            Find(total, out NextStep next, out Vector3 at);
+            bool same = next == _shown && (next == NextStep.None || VizScene.Flat(at - _shownAt).magnitude < 3f * Sample);
+            if (!same && _shown != NextStep.None && ShownAhead(out float shownMetres))
+            {
+                bool stillPending = next == _pending && (next == NextStep.None || VizScene.Flat(at - _pendingAt).magnitude < 3f * Sample);
+                if (!stillPending) { _pending = next; _pendingAt = at; _pendingSince = Time.unscaledTime; }
+                if (Time.unscaledTime - _pendingSince < SwitchAfter)
+                {
+                    info.Next = _shown;
+                    info.NextMetres = _shown == NextStep.Arrive ? total : shownMetres;
+                    return;
+                }
+            }
+            _shown = next;
+            _shownAt = at;
+            _pending = next;
+            _pendingAt = at;
+            info.Next = next;
+            info.NextMetres = next == NextStep.None ? 0f : next == NextStep.Arrive ? total : Metres(at);
+        }
+
+        /// <summary>The first bend of <see cref="TurnAngle"/> or more within <see cref="LookAhead"/>, or the end of the
+        /// route when it is that close. Samples sit every <see cref="Sample"/> metres counted from the path's start.</summary>
+        private static void Find(float total, out NextStep next, out Vector3 at)
+        {
+            next = NextStep.None;
+            at = Vector3.zero;
             if (Pts.Count < 2) return;
-            var s = new List<Vector3> { Pts[0] };
-            float carry = 0f;
-            for (int i = 0; i + 1 < Pts.Count && s.Count * Sample < LookAhead; i++)
+            Samples.Clear();
+            float carry = _carAlong % Sample;
+            for (int i = 0; i + 1 < Pts.Count && Samples.Count * Sample < LookAhead; i++)
             {
                 Vector3 a = Pts[i], b = Pts[i + 1];
                 float len = VizScene.Flat(b - a).magnitude;
-                float at = Sample - carry;
-                while (at <= len) { s.Add(Vector3.Lerp(a, b, at / len)); at += Sample; }
-                carry = len - (at - Sample);
+                float step = Sample - carry;
+                while (step <= len) { Samples.Add(Vector3.Lerp(a, b, step / len)); step += Sample; }
+                carry = len - (step - Sample);
             }
-            for (int k = 1; k + 2 < s.Count; k++)
+            for (int k = 1; k + 2 < Samples.Count; k++)
             {
-                float angle = Vector3.SignedAngle(VizScene.Flat(s[k] - s[k - 1]), VizScene.Flat(s[k + 2] - s[k + 1]), Vector3.up);
+                float angle = Vector3.SignedAngle(VizScene.Flat(Samples[k] - Samples[k - 1]), VizScene.Flat(Samples[k + 2] - Samples[k + 1]), Vector3.up);
                 if (Mathf.Abs(angle) < TurnAngle) continue;
-                info.Next = angle > 0f ? NextStep.Right : NextStep.Left;
-                info.NextMetres = k * Sample;
+                next = angle > 0f ? NextStep.Right : NextStep.Left;
+                at = Vector3.Lerp(Samples[k], Samples[k + 1], 0.5f);
                 return;
             }
-            if (total < LookAhead) { info.Next = NextStep.Arrive; info.NextMetres = total; }
+            if (total < LookAhead) { next = NextStep.Arrive; at = Pts[Pts.Count - 1]; }
+        }
+
+        /// <summary>Whether the shown step's point is still ahead on the path, and how far along it.</summary>
+        private static bool ShownAhead(out float metres)
+        {
+            metres = 0f;
+            if (_shown == NextStep.Arrive) return Pts.Count >= 2;
+            metres = Metres(_shownAt, out float side);
+            return metres > 0.5f && side < OnPath;
+        }
+
+        private static float Metres(Vector3 p) => Metres(p, out _);
+
+        /// <summary>Distance along the path from the car to the point nearest <paramref name="p"/>.</summary>
+        private static float Metres(Vector3 p, out float side)
+        {
+            float walked = 0f, along = 0f, best = float.MaxValue;
+            for (int i = 0; i + 1 < Pts.Count && walked < LookAhead; i++)
+            {
+                Vector3 a = VizScene.Flat(Pts[i]), ab = VizScene.Flat(Pts[i + 1] - Pts[i]);
+                float l = ab.sqrMagnitude;
+                float k = l < 0.0001f ? 0f : Mathf.Clamp01(Vector3.Dot(VizScene.Flat(p) - a, ab) / l);
+                float d = (a + ab * k - VizScene.Flat(p)).magnitude;
+                if (d < best) { best = d; along = walked + Mathf.Sqrt(l) * k; }
+                walked += Mathf.Sqrt(l);
+            }
+            side = best;
+            return along;
         }
 
         private static int Closest(Il2CppSystem.Collections.Generic.List<Vector3> vp, Vector3 p, out float t)

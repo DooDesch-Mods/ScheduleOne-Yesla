@@ -11,6 +11,10 @@ namespace Yesla.Visual
     /// </summary>
     internal static class VizOverlay
     {
+        /// <summary>The game's own speedometer shows the speed times this (VehicleCanvas.UpdateSpeedText), and so do the
+        /// speed and the limit here, so both read like the number at the bottom right.</summary>
+        internal const float ShownSpeed = 1.4f;
+
         private const float Depth = 1f;
 
         // The layout is written for a frame 0.597 x 0.466 half-size at one metre; the root scales it to the camera.
@@ -81,9 +85,10 @@ namespace Yesla.Visual
         {
             if (_speed == null) return;
             bool imperial = Imperial();
-            _speed.text = Mathf.RoundToInt(imperial ? info.SpeedKmh * 0.621371f : info.SpeedKmh).ToString();
+            float speed = info.SpeedKmh * ShownSpeed, limit = info.LimitKmh * ShownSpeed;
+            _speed.text = Mathf.RoundToInt(imperial ? speed * 0.621371f : speed).ToString();
             _unit.text = imperial ? "MPH" : "KM/H";
-            _limit.text = Mathf.RoundToInt(imperial ? info.LimitKmh * 0.621371f : info.LimitKmh).ToString();
+            _limit.text = Mathf.RoundToInt(imperial ? limit * 0.621371f : limit).ToString();
             _limitTitle.text = "SPEED\nLIMIT";
             _state.text = info.State ?? string.Empty;
             _state.color = info.Driving ? Blue : Grey;
