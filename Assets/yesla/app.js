@@ -440,8 +440,8 @@ function renderViews(car) {
   if (!viewEls.length) return false;
   var v = car.view >= 0 && car.view < viewEls.length ? car.view : 0;
   if (v !== shownView) {
-    if (shownView >= 0) viewEls[shownView].style.transform = 'scale(0.001, 0.001)';
-    viewEls[v].style.transform = 'scale(1, 1)';
+    // Every view gets its transform, not only the old and the new one, so no second car can stay visible.
+    for (var k = 0; k < viewEls.length; k++) viewEls[k].style.transform = k === v ? 'scale(1, 1)' : 'scale(0.001, 0.001)';
     shownView = v;
   }
   return true;
