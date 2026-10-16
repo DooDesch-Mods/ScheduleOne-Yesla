@@ -48,16 +48,20 @@ body {
 .status.live { color: var(--ok); }
 .status.warn { color: var(--warn); }
 
-.stage { height: 132px; margin-top: 2px; align-items: center; justify-content: center; }
-.pic { width: 236px; height: 122px; }
+/* The picture runs to the column's edges and takes the height the controls leave. */
+.stage { flex: 1; min-height: 0; margin: 2px -16px 0; align-items: center; justify-content: center; }
+.pic { width: 276px; height: 190px; }
+/* The car from every side, stacked; the page shows one by transform, a repaint rather than a rebuild. */
+.views { width: 276px; height: 190px; }
+.views .pic { position: absolute; left: 0; top: 0; }
 
-.stats { flex-direction: row; margin-top: 2px; }
+.stats { flex-direction: row; margin-top: 8px; }
 .stat { flex: 1; align-items: center; gap: 1px; }
 .stat .v { font-size: 15px; font-weight: 700; white-space: nowrap; }
 .stat .k { font-size: 10px; color: var(--muted); }
 
 /* Remote controls: a round button and its label under it. */
-.ctrls { flex-direction: row; justify-content: space-between; margin-top: auto; padding: 0 4px; }
+.ctrls { flex-direction: row; justify-content: space-between; margin-top: 16px; padding: 0 4px; }
 .ctl { align-items: center; gap: 5px; width: 52px; }
 .tile {
   width: 44px; height: 44px; border-radius: 22px; background: var(--raised);

@@ -14,16 +14,28 @@ namespace Yesla.Phone
     /// sun, ambient, fog and the game's renderer features are swapped for the call and restored. The camera is
     /// rendered twice, over black and over white; the difference between the two is the car's coverage, which gives
     /// a clean cut-out including the tinted glass.
+    ///
+    /// The car is shown from where the player's camera stands, turned about the vertical axis only. A set of
+    /// <see cref="Views"/> photos around the car is rendered one per frame while the app is on screen; the page stacks
+    /// them and shows the one nearest the camera, which is a repaint rather than a page rebuild. The view the camera
+    /// needs right now is rendered first, so the app has a photo after one frame and the full set a few frames later.
     /// </summary>
     internal static class CarPhoto
     {
         private const int Layer = Visual.VizScene.Layer;
-        // Twice the 236 x 122 css box, so the phone's own scaling has detail to work with.
-        private const int Width = 472, Height = 244;
+        // Twice the 276 x 190 css box, so the phone's own scaling has detail to work with.
+        private const int Width = 552, Height = 380;
         private const float FieldOfView = 22f;
-        // Seen from the front left and a little above, like a brochure shot.
-        private static readonly Vector3 ViewDirection = new Vector3(-0.78f, 0.30f, 0.95f);
-        private const float Fill = 0.86f;                 // share of the picture width the car takes
+        /// <summary>Photos around the car, one every 15 degrees.</summary>
+        internal const int Views = 24;
+        private const float ViewStep = 360f / Views;
+        // A little above the car, like a brochure shot: rise per metre of horizontal distance.
+        private const float Elevation = 0.244f;
+        // Front left, for a camera that sits inside the car.
+        private const int DefaultView = 21;
+        // A camera closer than this to the car's middle, in metres, is inside it.
+        private const float InsideRadius = 2.5f;
+        private const float Fill = 0.94f;                 // share of the picture width the car takes
         private const float ShadowAlpha = 0.55f;
 
         private static Camera _cam;
@@ -34,8 +46,25 @@ namespace Yesla.Phone
         private static int _serial;
         private static bool _failed;
 
+        private static string[] _views;
+        private static string[] _pending;
+        private static LandVehicle _pendingCar;
+        private static int[] _order;
+        private static int _orderAt;
+        private static double _pendingMs, _slowestMs;
+        private static int _lastView = -1;
+        // Milliseconds per stage of Take over the set in progress: prepare, render, restore, cut-out, encode.
+        private static readonly double[] Stages = new double[5];
+        private static readonly System.Diagnostics.Stopwatch StageWatch = new System.Diagnostics.Stopwatch();
+
         /// <summary>The image name of the newest photo, or null when there is none.</summary>
         internal static string Current => _current;
+
+        /// <summary>All <see cref="Views"/> photo names of the newest complete set, index = view; null until one is.</summary>
+        internal static string[] ViewNames => _views;
+
+        /// <summary>Changes whenever a new set of views is complete.</summary>
+        internal static int Revision { get; private set; }
 
         /// <summary>
         /// Takes a new photo when the car, its paint or its plate changed, or when <paramref name="force"/> asks for one
@@ -47,23 +76,114 @@ namespace Yesla.Phone
             if (car == null || !car.gameObject.activeInHierarchy) return false;
             string key = car.Pointer.ToInt64() + "|" + car.OwnedColor + "|" + plate;
             if (!force && key == _shownKey) return false;
-
-            byte[] png = Take(car);
-            if (png == null) return false;
-
-            string old = _current;
-            _current = "yesla-car-photo-" + (++_serial);
-            app.Image(_current, png);
-            if (old != null) app.Image(old, null);
             _shownKey = key;
-            Core.Log.Msg("[CarPhoto] " + car.VehicleName + " photographed (" + car.OwnedColor + ", plate '" + plate + "', " + (png.Length / 1024) + " KB) as " + _current + ".");
+
+            // A set still being rendered for the old look is dropped; its finished photos go with it.
+            if (_pending != null) Drop(app, _pending, "the car, its paint or its plate changed");
+            _serial++;
+            _pending = new string[Views];
+            _pendingCar = car;
+            _pendingMs = _slowestMs = 0;
+            System.Array.Clear(Stages, 0, Stages.Length);
+            int first = ViewOf(car);
+            _order = new int[Views];
+            _order[0] = first;
+            for (int i = 1, n = 1; n < Views; i++)
+            {
+                _order[n++] = (first + i) % Views;
+                if (n < Views) _order[n++] = (first - i + Views) % Views;
+            }
+            _orderAt = 0;
+            Core.Log.Msg("[CarPhoto] photographing " + car.VehicleName + " (" + car.OwnedColor + ", plate '" + plate + "') from " + Views + " sides, view " + first + " first.");
+
+            // The view the camera needs now, at once: the app shows it until the whole set is done.
+            if (!Step(app)) return false;
             return true;
+        }
+
+        /// <summary>
+        /// Renders the next view of the set in progress. Call once a frame while the app is on screen; true while
+        /// the set is going well or finished, false when it was given up.
+        /// </summary>
+        internal static bool Step(AppHandle app)
+        {
+            if (_pending == null || app == null) return true;
+            LandVehicle car = _pendingCar;
+            if (car == null || !car.gameObject.activeInHierarchy)
+            {
+                Drop(app, _pending, "the car is gone");
+                _pending = null;
+                _shownKey = "";
+                return false;
+            }
+
+            int view = _order[_orderAt];
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            byte[] png = Take(car, view * ViewStep);
+            watch.Stop();
+            if (png == null)
+            {
+                Drop(app, _pending, "view " + view + " could not be photographed");
+                _pending = null;
+                return false;
+            }
+            _pendingMs += watch.Elapsed.TotalMilliseconds;
+            _slowestMs = System.Math.Max(_slowestMs, watch.Elapsed.TotalMilliseconds);
+
+            string name = "yesla-car-photo-" + _serial + "-" + view;
+            app.Image(name, png);
+            _pending[view] = name;
+            if (_orderAt == 0) _current = name;
+            _orderAt++;
+            if (_orderAt < Views) return true;
+
+            if (_views != null) Drop(app, _views, null);
+            _views = _pending;
+            _pending = null;
+            Revision++;
+            Core.Log.Msg("[CarPhoto] " + Views + " views of " + car.VehicleName + " ready: " + _pendingMs.ToString("0") + " ms in all, slowest "
+                         + _slowestMs.ToString("0") + " ms, last " + (png.Length / 1024) + " KB. Stages: prepare " + Stages[0].ToString("0")
+                         + ", render " + Stages[1].ToString("0") + ", restore " + Stages[2].ToString("0") + ", cut-out " + Stages[3].ToString("0")
+                         + ", encode " + Stages[4].ToString("0") + " ms.");
+            return true;
+        }
+
+        /// <summary>
+        /// The view that shows <paramref name="car"/> as the player's camera sees it, turned about the vertical axis
+        /// only. A camera inside the car gets the front-left view; near a boundary the last view holds for a few
+        /// degrees, so a camera that sits on one does not flick between two.
+        /// </summary>
+        internal static int ViewOf(LandVehicle car)
+        {
+            Camera cam = PlayerSingleton<PlayerCamera>.InstanceExists ? PlayerSingleton<PlayerCamera>.Instance.Camera : null;
+            if (cam == null) cam = Camera.main;
+            if (car == null || cam == null) return DefaultView;
+
+            Vector3 v = cam.transform.position - car.transform.position;
+            v.y = 0f;
+            if (v.sqrMagnitude < InsideRadius * InsideRadius) return _lastView = DefaultView;
+            Vector3 local = car.transform.InverseTransformDirection(v);
+            float angle = Mathf.Atan2(local.x, local.z) * Mathf.Rad2Deg;
+            if (_lastView >= 0 && Mathf.Abs(Mathf.DeltaAngle(angle, _lastView * ViewStep)) < ViewStep * 0.65f) return _lastView;
+            int k = Mathf.RoundToInt(angle / ViewStep);
+            return _lastView = ((k % Views) + Views) % Views;
         }
 
         internal static void Reset()
         {
             _shownKey = "";
             _current = null;
+            _views = null;
+            _pending = null;
+            _pendingCar = null;
+            _lastView = -1;
+        }
+
+        private static void Drop(AppHandle app, string[] names, string why)
+        {
+            if (why != null) Core.Log.Warning("[CarPhoto] set of views dropped: " + why + ".");
+            foreach (string n in names)
+                if (n != null && n != _current) app.Image(n, null);
         }
 
         private static bool Build()
@@ -118,7 +238,7 @@ namespace Yesla.Phone
             return l;
         }
 
-        private static byte[] Take(LandVehicle car)
+        private static byte[] Take(LandVehicle car, float yaw)
         {
             if (!Build()) return null;
 
@@ -130,6 +250,7 @@ namespace Yesla.Phone
             Color sky = RenderSettings.ambientSkyColor, equator = RenderSettings.ambientEquatorColor, ground = RenderSettings.ambientGroundColor;
             RenderTexture active = RenderTexture.active;
             Texture2D black = null, white = null;
+            StageWatch.Restart();
             try
             {
                 if (car.boundingBox == null) { Core.Log.Warning("[CarPhoto] " + car.VehicleName + " has no bounding box to aim at - the app keeps the drawn car picture."); return null; }
@@ -137,8 +258,12 @@ namespace Yesla.Phone
                 Transform boxT = car.boundingBox.transform;
                 Bounds bounds = new Bounds(boxT.TransformPoint(car.boundingBox.center), Vector3.zero);
                 Vector3 h = car.boundingBox.size * 0.5f;
+                var corners = new Vector3[8];
                 for (int corner = 0; corner < 8; corner++)
-                    bounds.Encapsulate(boxT.TransformPoint(car.boundingBox.center + new Vector3((corner & 1) == 0 ? -h.x : h.x, (corner & 2) == 0 ? -h.y : h.y, (corner & 4) == 0 ? -h.z : h.z)));
+                {
+                    corners[corner] = boxT.TransformPoint(car.boundingBox.center + new Vector3((corner & 1) == 0 ? -h.x : h.x, (corner & 2) == 0 ? -h.y : h.y, (corner & 4) == 0 ? -h.z : h.z));
+                    bounds.Encapsulate(corners[corner]);
+                }
                 float carSize = bounds.extents.magnitude;
 
                 int skipped = 0;
@@ -154,7 +279,7 @@ namespace Yesla.Phone
                 if (moved.Count == 0) { Core.Log.Warning("[CarPhoto] " + car.VehicleName + " has no visible renderer - the app keeps the drawn car picture."); return null; }
                 if (skipped > 0) Core.Log.Msg("[CarPhoto] left out " + skipped + " renderer(s) larger than the car, such as headlight beams.");
 
-                Aim(car.transform, bounds);
+                Aim(car.transform, bounds.center, corners, yaw);
 
                 Visual.VizScene.FeaturesOff();
                 if (sunOn) sun.enabled = false;
@@ -167,8 +292,10 @@ namespace Yesla.Phone
                 RenderSettings.ambientEquatorColor = new Color(0.42f, 0.43f, 0.46f);
                 RenderSettings.ambientGroundColor = new Color(0.16f, 0.16f, 0.17f);
 
+                Lap(0);
                 black = Shoot(Color.black);
                 white = Shoot(Color.white);
+                Lap(1);
             }
             catch (System.Exception e)
             {
@@ -189,16 +316,11 @@ namespace Yesla.Phone
                 RenderSettings.ambientGroundColor = ground;
                 RenderTexture.active = active;
                 Visual.VizScene.FeaturesBack();
+                Lap(2);
             }
 
             try
             {
-#if DEBUG
-                string dir = System.IO.Path.Combine(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, "YeslaPhoto");
-                System.IO.Directory.CreateDirectory(dir);
-                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "black.png"), ImageConversion.EncodeToPNG(black));
-                System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, "white.png"), ImageConversion.EncodeToPNG(white));
-#endif
                 return Compose(black, white, car.transform);
             }
             catch (System.Exception e)
@@ -213,18 +335,30 @@ namespace Yesla.Phone
             }
         }
 
-        /// <summary>Points the camera at the car from the front left and pulls back until the car fills the frame.</summary>
-        private static void Aim(Transform car, Bounds bounds)
+        /// <summary>
+        /// Points the camera at the car from <paramref name="yaw"/> degrees around it (0 = straight ahead, negative =
+        /// the car's left) and a little above, and pulls back until the car's box fills the frame from that side.
+        /// A view from the front is narrower than one from the side, so each view gets its own distance.
+        /// </summary>
+        private static void Aim(Transform car, Vector3 centre, Vector3[] corners, float yaw)
         {
-            Vector3 centre = bounds.center;
-            Vector3 dir = car.TransformDirection(ViewDirection.normalized);
-            float radius = bounds.extents.magnitude;
-            // Distance at which a sphere around the car spans Fill of the picture width.
-            float halfH = FieldOfView * 0.5f * Mathf.Deg2Rad;
-            float halfW = Mathf.Atan(Mathf.Tan(halfH) * Width / Height);
-            float distance = radius / Mathf.Sin(halfW * Fill);
+            float rad = yaw * Mathf.Deg2Rad;
+            Vector3 dir = car.TransformDirection(new Vector3(Mathf.Sin(rad), Elevation, Mathf.Cos(rad)).normalized);
+            Quaternion look = Quaternion.LookRotation(-dir, Vector3.up);
+            Vector3 right = look * Vector3.right, up = look * Vector3.up, forward = look * Vector3.forward;
+            float tanH = Mathf.Tan(FieldOfView * 0.5f * Mathf.Deg2Rad) * Fill;
+            float tanW = tanH * Width / Height;
+            // A corner at (x, y, z) from the centre in camera axes sits at depth distance + z; it fits when
+            // |x| <= tanW * (distance + z), and the same for y.
+            float distance = 0f;
+            foreach (Vector3 corner in corners)
+            {
+                Vector3 v = corner - centre;
+                float z = Vector3.Dot(v, forward);
+                distance = Mathf.Max(distance, Mathf.Abs(Vector3.Dot(v, right)) / tanW - z, Mathf.Abs(Vector3.Dot(v, up)) / tanH - z);
+            }
             _cam.transform.position = centre + dir * distance;
-            _cam.transform.rotation = Quaternion.LookRotation(centre - _cam.transform.position, Vector3.up);
+            _cam.transform.rotation = look;
 
             // Key light high from the camera's left, rim light low from behind the car on the right.
             _key.transform.rotation = Quaternion.LookRotation(Quaternion.AngleAxis(-35f, Vector3.up) * Flat(-dir) + Vector3.down * 1.3f, Vector3.up);
@@ -259,29 +393,62 @@ namespace Yesla.Phone
         private static byte[] Compose(Texture2D black, Texture2D white, Transform car)
         {
             Tables();
-            var b = black.GetPixels32();
-            var w = white.GetPixels32();
+            byte[] b = Bytes(black), w = Bytes(white);
             float[] shadow = Shadow(car);
             var outTex = new Texture2D(Width, Height, TextureFormat.RGBA32, false);
             var px = new Color32[Width * Height];
             for (int i = 0; i < px.Length; i++)
             {
-                Color32 cb = b[i], cw = w[i];
-                float br = _toLinear[cb.r], bg = _toLinear[cb.g], bb = _toLinear[cb.b];
-                float a = 1f - ((_toLinear[cw.r] - br) + (_toLinear[cw.g] - bg) + (_toLinear[cw.b] - bb)) / 3f;
-                a = Mathf.Clamp01(a);
+                int o = i * 4;
+                float br = _toLinear[b[o]], bg = _toLinear[b[o + 1]], bb = _toLinear[b[o + 2]];
+                float a = 1f - ((_toLinear[w[o]] - br) + (_toLinear[w[o + 1]] - bg) + (_toLinear[w[o + 2]] - bb)) / 3f;
+                a = a < 0f ? 0f : a > 1f ? 1f : a;
                 float s = shadow[i] * (1f - a);
                 float alpha = a + s;
                 if (alpha <= 0.002f) { px[i] = new Color32(0, 0, 0, 0); continue; }
                 // Premultiplied car over a black shadow, then back to straight alpha for the PNG.
                 float inv = 1f / alpha;
-                px[i] = new Color32(Srgb(br * inv), Srgb(bg * inv), Srgb(bb * inv), (byte)Mathf.RoundToInt(alpha * 255f));
+                px[i] = new Color32(Srgb(br * inv), Srgb(bg * inv), Srgb(bb * inv), (byte)(alpha * 255f + 0.5f));
             }
+            Lap(3);
             outTex.SetPixels32(px);
             outTex.Apply(false, false);
             byte[] png = ImageConversion.EncodeToPNG(outTex);
             UnityEngine.Object.Destroy(outTex);
+            Lap(4);
             return png;
+        }
+
+        /// <summary>
+        /// The texture's RGBA bytes in one copy. Reading an IL2CPP array element by element crosses into the runtime
+        /// for every pixel, which made one photo take seconds.
+        /// </summary>
+        private static byte[] Bytes(Texture2D tex)
+        {
+            var native = tex.GetPixels32();
+            var bytes = new byte[native.Length * 4];
+            // An IL2CPP array's elements follow its header: class, monitor, bounds and length, one pointer each.
+            System.Runtime.InteropServices.Marshal.Copy(System.IntPtr.Add(native.Pointer, 4 * System.IntPtr.Size), bytes, 0, bytes.Length);
+
+            int last = native.Length - 1;
+            Color32 first = native[0], end = native[last];
+            if (bytes[0] == first.r && bytes[1] == first.g && bytes[2] == first.b && bytes[3] == first.a
+                && bytes[last * 4] == end.r && bytes[last * 4 + 3] == end.a)
+                return bytes;
+
+            Core.Log.Error("[CarPhoto] the block copy of the pixels does not match the texture - reading them one by one, which is slow.");
+            for (int i = 0; i < native.Length; i++)
+            {
+                Color32 c = native[i];
+                bytes[i * 4] = c.r; bytes[i * 4 + 1] = c.g; bytes[i * 4 + 2] = c.b; bytes[i * 4 + 3] = c.a;
+            }
+            return bytes;
+        }
+
+        private static void Lap(int stage)
+        {
+            Stages[stage] += StageWatch.Elapsed.TotalMilliseconds;
+            StageWatch.Restart();
         }
 
         /// <summary>
@@ -302,7 +469,7 @@ namespace Yesla.Phone
                     if (wh != null && wh.wheelCollider != null) groundY = Mathf.Min(groundY, wh.wheelCollider.transform.position.y - wh.wheelCollider.radius);
             if (groundY == float.MaxValue) groundY = box.TransformPoint(c - new Vector3(0f, size.y * 0.5f, 0f)).y;
 
-            var corners = new Vector2[4];
+            float[] qx = new float[4], qy = new float[4];
             float[] sx = { -0.5f, 0.5f, 0.5f, -0.5f }, sz = { -0.5f, -0.5f, 0.5f, 0.5f };
             for (int k = 0; k < 4; k++)
             {
@@ -310,48 +477,68 @@ namespace Yesla.Phone
                 p.y = groundY;
                 Vector3 sp = _cam.WorldToScreenPoint(p);
                 // Screen y runs up, the picture's rows run down after ReadPixels' bottom-up order - both bottom-up here.
-                corners[k] = new Vector2(sp.x * Width / _cam.pixelWidth, sp.y * Height / _cam.pixelHeight);
+                qx[k] = sp.x * Width / _cam.pixelWidth;
+                qy[k] = sp.y * Height / _cam.pixelHeight;
             }
 
             float soft = Width * 0.045f;
             for (int y = 0; y < Height; y++)
                 for (int x = 0; x < Width; x++)
                 {
-                    float d = SignedDistance(new Vector2(x + 0.5f, y + 0.5f), corners);
-                    float t = Mathf.Clamp01(0.5f - d / (2f * soft));
+                    float d = SignedDistance(x + 0.5f, y + 0.5f, qx, qy);
+                    float t = 0.5f - d / (2f * soft);
+                    t = t < 0f ? 0f : t > 1f ? 1f : t;
                     result[y * Width + x] = ShadowAlpha * t * t * (3f - 2f * t);
                 }
             return result;
         }
 
-        /// <summary>Distance to a convex quad's edge, negative inside, either winding.</summary>
-        private static float SignedDistance(Vector2 p, Vector2[] q)
+        /// <summary>
+        /// Distance to a convex quad's edge, negative inside, either winding. Plain floats on purpose: Vector2 and
+        /// Mathf members are calls into the IL2CPP runtime, and this runs for every pixel.
+        /// </summary>
+        private static float SignedDistance(float px, float py, float[] qx, float[] qy)
         {
             float best = float.MaxValue;
             bool inside = true;
-            float sign = 0f;
-            for (int i = 0; i < q.Length; i++)
+            int sign = 0;
+            for (int i = 0; i < 4; i++)
             {
-                Vector2 a = q[i], b = q[(i + 1) % q.Length];
-                Vector2 ab = b - a, ap = p - a;
-                float t = Mathf.Clamp01(Vector2.Dot(ap, ab) / Mathf.Max(ab.sqrMagnitude, 1e-6f));
-                best = Mathf.Min(best, (ap - ab * t).magnitude);
-                float cross = ab.x * ap.y - ab.y * ap.x;
-                if (sign == 0f) sign = Mathf.Sign(cross);
-                else if (Mathf.Sign(cross) != sign) inside = false;
+                int j = (i + 1) & 3;
+                float abx = qx[j] - qx[i], aby = qy[j] - qy[i], apx = px - qx[i], apy = py - qy[i];
+                float len2 = abx * abx + aby * aby;
+                float t = (apx * abx + apy * aby) / (len2 > 1e-6f ? len2 : 1e-6f);
+                t = t < 0f ? 0f : t > 1f ? 1f : t;
+                float dx = apx - abx * t, dy = apy - aby * t;
+                float dist = (float)System.Math.Sqrt(dx * dx + dy * dy);
+                if (dist < best) best = dist;
+                float cross = abx * apy - aby * apx;
+                int side = cross > 0f ? 1 : cross < 0f ? -1 : 0;
+                if (sign == 0) sign = side;
+                else if (side != 0 && side != sign) inside = false;
             }
             return inside ? -best : best;
         }
 
         private static float[] _toLinear;
+        // Linear light to an sRGB byte, sampled finely enough that neighbouring entries differ by at most one step.
+        private const int GammaSteps = 4096;
+        private static byte[] _toSrgb;
 
         private static void Tables()
         {
             if (_toLinear != null) return;
             _toLinear = new float[256];
             for (int i = 0; i < 256; i++) _toLinear[i] = Mathf.GammaToLinearSpace(i / 255f);
+            _toSrgb = new byte[GammaSteps + 1];
+            for (int i = 0; i <= GammaSteps; i++) _toSrgb[i] = (byte)Mathf.RoundToInt(Mathf.Clamp01(Mathf.LinearToGammaSpace(i / (float)GammaSteps)) * 255f);
         }
 
-        private static byte Srgb(float linear) => (byte)Mathf.RoundToInt(Mathf.Clamp01(Mathf.LinearToGammaSpace(Mathf.Clamp01(linear))) * 255f);
+        private static byte Srgb(float linear)
+        {
+            if (!(linear > 0f)) return 0;
+            if (linear >= 1f) return 255;
+            return _toSrgb[(int)(linear * GammaSteps + 0.5f)];
+        }
     }
 }

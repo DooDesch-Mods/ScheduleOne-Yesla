@@ -65,6 +65,7 @@ namespace Yesla.Phone
             using var __perf = Snitch.Api.Profiler.Sample("Yesla.YeslaApp.Tick");
 #endif
             if (_app == null) return;
+            if (_app.IsOnScreen) CarPhoto.Step(_app);
             float now = Time.unscaledTime;
             if (now < _nextPulse) return;
             _nextPulse = now + PulseSeconds;
@@ -197,6 +198,9 @@ namespace Yesla.Phone
                     .Prop("sentry", rec != null && rec.Sentry)
                     .Prop("paint", paint.ToString())
                     .Prop("picture", CarPhoto.Current ?? CarPicture.Ensure(_app, paint) ?? "")
+                    .Prop("view", CarPhoto.ViewOf(car));
+                if (CarPhoto.ViewNames != null) j.Key("views").OpenArray().Strings(CarPhoto.ViewNames).CloseArray();
+                j
                     .Prop("plate", rec != null ? rec.PlateText : "")
                     .Prop("plateOwn", rec != null ? rec.Plate : "")
                     .Prop("plateDefault", rec != null ? rec.DefaultPlate : "")
@@ -376,6 +380,8 @@ namespace Yesla.Phone
                 h = h * 31 + DriveProfile.Current.Id.GetHashCode();
                 h = h * 31 + MapRoute.Revision;
                 h = h * 31 + (CarPhoto.Current ?? string.Empty).GetHashCode();
+                h = h * 31 + CarPhoto.Revision;
+                h = h * 31 + (car != null ? CarPhoto.ViewOf(car) : -1);
                 h = h * 31 + MapRoute.At;
                 return h;
             }

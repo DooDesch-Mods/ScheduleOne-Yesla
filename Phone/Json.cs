@@ -28,6 +28,13 @@ namespace Yesla.Phone
             return this;
         }
 
+        /// <summary>Strings, for the inside of an array.</summary>
+        internal Json Strings(string[] values)
+        {
+            foreach (string v in values) { Sep(); if (v == null) _sb.Append("null"); else Str(v); }
+            return this;
+        }
+
         public override string ToString() => _sb.ToString();
 
         private void Sep()

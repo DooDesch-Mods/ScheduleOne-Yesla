@@ -40,6 +40,7 @@ var tab = 'drive';
 var full = false;
 var plateDraft = null;   // what the player typed into the plate field, null while untouched
 var shownPicture = '';
+var viewsKey = '', viewEls = [], shownView = -1;
 
 var tx = 0, ty = 0, zoom = ZOOM_START;
 
@@ -413,6 +414,39 @@ function summonLine() {
   }
 }
 
+// The car seen from the player's camera: one stacked photo per side, the nearest one scaled to full size, the rest
+// to nothing. Returns whether the set is there to show.
+function renderViews(car) {
+  var box = $('car-views');
+  var names = car && car.views;
+  var key = names ? names.join(',') : '';
+  if (key !== viewsKey) {
+    viewsKey = key;
+    box.replaceChildren();
+    viewEls = [];
+    shownView = -1;
+    if (names) {
+      for (var i = 0; i < names.length; i++) {
+        var img = document.createElement('img');
+        img.className = 'pic';
+        img.setAttribute('src', 's1://' + names[i]);
+        img.style.transform = 'scale(0.001, 0.001)';
+        box.appendChild(img);
+        viewEls.push(img);
+      }
+    }
+  }
+  show(box, viewEls.length > 0);
+  if (!viewEls.length) return false;
+  var v = car.view >= 0 && car.view < viewEls.length ? car.view : 0;
+  if (v !== shownView) {
+    if (shownView >= 0) viewEls[shownView].style.transform = 'scale(0.001, 0.001)';
+    viewEls[v].style.transform = 'scale(1, 1)';
+    shownView = v;
+  }
+  return true;
+}
+
 function renderCar() {
   var car = state.car;
   var line = $('car-line');
@@ -423,6 +457,7 @@ function renderCar() {
     setPieces(line, ['No Yesla nearby']);
     setStatus('');
     show(pic, false);
+    renderViews(null);
     setText($('s-top'), '-');
     setText($('s-plate'), '-');
   } else {
@@ -431,7 +466,8 @@ function renderCar() {
       shownPicture = car.picture;
       pic.setAttribute('src', 's1://' + car.picture);
     }
-    show(pic, !!car.picture);
+    var turned = renderViews(car);
+    show(pic, !!car.picture && !turned);
     setText($('s-top'), String(Math.round(car.top)));
     setText($('s-plate'), car.plate || '-');
 
