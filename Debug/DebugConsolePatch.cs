@@ -70,7 +70,7 @@ namespace Yesla.Debugging
                         Say("steer <x>          - set the steering axis like a key press (0 releases it)");
                         Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
                         Say("fp eye <x> <y> <z> - eye position in the seat's local space");
-                        Say("viz [hud|full|off] - driving visualisation view (same as the visualisation key)");
+                        Say("viz [hud|full|off|lights] - driving visualisation view (same as the visualisation key); lights lists nearby traffic lights");
                         Say("viz save [path]    - write the current visualisation picture to a PNG");
                         Say("vizprobe           - road links, layers, shaders and cameras the visualisation uses");
                         Say("cabin <i> [range] [x y z] - tune the first-person cabin light live");
@@ -337,7 +337,13 @@ namespace Yesla.Debugging
                             Say(Visual.VizScene.Save(path));
                             break;
                         }
-                        else if (arg != "") { Say("usage: yesla viz [hud|full|off|save [path]]"); break; }
+                        else if (arg == "lights")
+                        {
+                            LandVehicle near = Driving.Autopilot.CurrentCar();
+                            Say(near != null ? Visual.VizScene.DescribeLights(near) : "not in a car");
+                            break;
+                        }
+                        else if (arg != "") { Say("usage: yesla viz [hud|full|off|lights|save [path]]"); break; }
                         Say("view " + Visual.Viz.Mode + ", " + Visual.VizScene.Describe());
                         break;
                     }

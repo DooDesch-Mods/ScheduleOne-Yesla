@@ -74,6 +74,18 @@ namespace Yesla.Vehicle
                 }
             }
 
+            // The visualisation's stand-in car. It stays inactive and outside the LODGroup, so the world never draws it;
+            // VizScene only reads its meshes and transforms.
+            if (model.Nodes.TryGetValue("Body_Viz", out List<GlbModel.Part> vizParts))
+            {
+                var viz = new GameObject("Body_Viz");
+                viz.layer = layer;
+                viz.SetActive(false);
+                viz.transform.SetParent(root.transform, false);
+                foreach (GlbModel.Part part in vizParts) AddPart(viz.transform, part, layer);
+            }
+            else Core.Log.Warning("[Body] the model has no Body_Viz - the visualisation has no car.");
+
             var old = lodGroup.GetLODs();
             var newLods = new Il2CppReferenceArray<LOD>(3);
             for (int i = 0; i < 3; i++)

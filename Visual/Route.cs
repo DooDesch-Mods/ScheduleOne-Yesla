@@ -19,9 +19,9 @@ namespace Yesla.Visual
     }
 
     /// <summary>
-    /// The blue route band and the next manoeuvre, from the path the road AI is following. The band starts at the
-    /// car's spot on the path and runs a fixed distance ahead; the next turn is the first bend of more than 40 degrees
-    /// over 15 m of road.
+    /// The blue route band and the next manoeuvre, from the path the road AI is following. The band is as wide as the
+    /// car, starts at its front bumper, runs a fixed distance ahead and fades out over its last stretch; the next turn
+    /// is the first bend of more than 40 degrees over 15 m of road.
     /// </summary>
     internal static class Route
     {
@@ -29,6 +29,10 @@ namespace Yesla.Visual
         private const float Sample = 5f;
         private const float TurnAngle = 40f;
         private const float LookAhead = 600f;
+        private const float FrontOffset = 2.3f;   // from the car's centre to its front bumper, along the path
+        private const float StripStep = 2f;       // the band's resolution along the path
+
+        private static readonly List<Vector3> Strip = new List<Vector3>();
 
         private static readonly List<Vector3> Pts = new List<Vector3>();
 
@@ -50,21 +54,9 @@ namespace Yesla.Visual
                 for (int i = seg + 1; i < vp.Count; i++) Pts.Add(vp[i]);
             }
 
-            var v = new List<Vector3>();
-            var tri = new List<int>();
-            float total = 0f, drawn = 0f;
-            for (int i = 0; i + 1 < Pts.Count; i++)
-            {
-                float len = VizScene.Flat(Pts[i + 1] - Pts[i]).magnitude;
-                if (drawn < ahead && len > 0.01f)
-                {
-                    Vector3 d = VizScene.Flat(Pts[i + 1] - Pts[i]) / len;
-                    VizRoads.Quad(v, tri, Pts[i], Pts[i + 1] + d * 0.3f, Vector3.Cross(Vector3.up, d), 0f, width, Lift);
-                    drawn += len;
-                }
-                total += len;
-            }
-            VizRoads.Fill(band, v, tri);
+            float total = 0f;
+            for (int i = 0; i + 1 < Pts.Count; i++) total += VizScene.Flat(Pts[i + 1] - Pts[i]).magnitude;
+            BuildBand(band, ahead, width);
             info.RouteMetres = total;
             NextTurn(ref info, total);
 
@@ -73,6 +65,81 @@ namespace Yesla.Visual
             pin.gameObject.SetActive(dest.HasValue);
             if (dest.HasValue) pin.position = dest.Value + Vector3.up * 1.6f + VizScene.Origin;
             return info;
+        }
+
+        /// <summary>
+        /// A continuous strip along the path from the bumper, one row every 2 m. V runs 0 to 1 along it so the
+        /// material's gradient fades the far end; a strip instead of overlapping quads keeps the see-through end even.
+        /// </summary>
+        private static void BuildBand(Mesh band, float ahead, float width)
+        {
+            Strip.Clear();
+            float walked = 0f, next = FrontOffset, end = FrontOffset + ahead;
+            for (int i = 0; i + 1 < Pts.Count && next <= end; i++)
+            {
+                Vector3 a = Pts[i], b = Pts[i + 1];
+                float len = VizScene.Flat(b - a).magnitude;
+                while (next <= walked + len && next <= end)
+                {
+                    Strip.Add(Vector3.Lerp(a, b, len < 0.001f ? 0f : (next - walked) / len));
+                    next += StripStep;
+                }
+                walked += len;
+            }
+            if (Pts.Count > 1 && walked > FrontOffset && Strip.Count > 0 && walked < end) Strip.Add(Pts[Pts.Count - 1]);
+
+            band.Clear();
+            if (Strip.Count < 2) return;
+            var v = new Vector3[Strip.Count * 2];
+            var uv = new Vector2[Strip.Count * 2];
+            var tri = new int[(Strip.Count - 1) * 6];
+            float run = 0f, full = 0f;
+            for (int i = 0; i + 1 < Strip.Count; i++) full += VizScene.Flat(Strip[i + 1] - Strip[i]).magnitude;
+            for (int i = 0; i < Strip.Count; i++)
+            {
+                Vector3 back = i > 0 ? VizScene.Flat(Strip[i] - Strip[i - 1]) : Vector3.zero;
+                Vector3 fwd = i + 1 < Strip.Count ? VizScene.Flat(Strip[i + 1] - Strip[i]) : Vector3.zero;
+                Vector3 d = (back.normalized + fwd.normalized).normalized;
+                if (d.sqrMagnitude < 0.01f) d = fwd.sqrMagnitude > 0f ? fwd.normalized : back.normalized;
+                Vector3 h = Vector3.Cross(Vector3.up, d) * (width * 0.5f);
+                if (i > 0) run += back.magnitude;
+                float t = full > 0.01f ? run / full : 0f;
+                Vector3 c = Strip[i] + Vector3.up * Lift;
+                v[i * 2] = c - h; v[i * 2 + 1] = c + h;
+                uv[i * 2] = new Vector2(0f, t); uv[i * 2 + 1] = new Vector2(1f, t);
+            }
+            for (int i = 0; i + 1 < Strip.Count; i++)
+            {
+                int k = i * 6, a = i * 2;
+                tri[k] = a; tri[k + 1] = a + 2; tri[k + 2] = a + 1;
+                tri[k + 3] = a + 1; tri[k + 4] = a + 2; tri[k + 5] = a + 3;
+            }
+            band.vertices = v;
+            band.uv = uv;
+            band.triangles = tri;
+            band.RecalculateBounds();
+        }
+
+        /// <summary>
+        /// How far along the current path a point lies, from the car, and how far it is to the side of it. False when
+        /// there is no path or the point is behind the car.
+        /// </summary>
+        internal static bool Along(Vector3 p, out float along, out float side)
+        {
+            along = 0f; side = float.MaxValue;
+            if (Pts.Count < 2) return false;
+            float walked = 0f, best = float.MaxValue;
+            for (int i = 0; i + 1 < Pts.Count && walked < 120f; i++)
+            {
+                Vector3 a = VizScene.Flat(Pts[i]), ab = VizScene.Flat(Pts[i + 1] - Pts[i]);
+                float l = ab.sqrMagnitude;
+                float k = l < 0.0001f ? 0f : Mathf.Clamp01(Vector3.Dot(VizScene.Flat(p) - a, ab) / l);
+                float d = (a + ab * k - VizScene.Flat(p)).magnitude;
+                if (d < best) { best = d; along = walked + Mathf.Sqrt(l) * k; }
+                walked += Mathf.Sqrt(l);
+            }
+            side = best;
+            return along > 0.5f;
         }
 
         private static string StateText(LandVehicle car, out bool driving)
