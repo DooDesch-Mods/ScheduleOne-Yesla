@@ -2,7 +2,7 @@
 
 > 🛟 **Need help or found a bug?** Get support at [support.doodesch.de/yesla](https://support.doodesch.de/yesla).
 
-![Version](https://img.shields.io/badge/version-0.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
@@ -74,4 +74,4 @@ Car model "Tesla 2018 Model 3" by Ameer Studio, licensed
 
 ## License
 
-MIT. See [LICENSE.md](LICENSE.md). The car model is CC-BY-4.0, see [LICENSE-MODEL.txt](LICENSE-MODEL.txt).
+DooDesch, see [LICENSE.md](LICENSE.md). Forks, changes and pull requests are welcome. Publishing or reuploading the mod or a changed copy needs written permission. The car model is CC-BY-4.0, see [LICENSE-MODEL.txt](LICENSE-MODEL.txt).
