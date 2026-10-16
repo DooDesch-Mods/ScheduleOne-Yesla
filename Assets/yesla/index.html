@@ -1,0 +1,44 @@
+<link rel="stylesheet" href="app.css">
+
+<div class="app">
+
+  <!-- The map: a picture bigger than its window, moved under it with one transform. -->
+  <div class="viewport" id="viewport">
+    <div class="world" id="world">
+      <img class="map" id="map-img" src="s1://yesla-map" alt="">
+      <div class="nomap" id="nomap"></div>
+      <div class="layer" id="places"></div>
+      <div class="layer" id="marks">
+        <div class="dest" id="m-dest"><div class="core"></div></div>
+        <div class="pending" id="m-pending"></div>
+        <div class="car" id="m-car"><div class="nose"></div></div>
+        <div class="me" id="m-me"><div class="dot"></div></div>
+      </div>
+    </div>
+    <div class="tag" id="tag"></div>
+    <button class="locate" id="locate">Car</button>
+  </div>
+
+  <div class="side">
+    <div class="head">
+      <div class="title" id="car-name">Yesla</div>
+      <div class="sub" id="car-line">No Yesla nearby</div>
+    </div>
+
+    <div class="card" id="card">
+      <div class="card-label" id="card-label">Destination</div>
+      <div class="card-name" id="card-name">Choose a place or tap the map</div>
+      <div class="card-line" id="card-line"></div>
+      <div class="actions">
+        <button class="btn primary" id="send">Send to car</button>
+        <button class="btn" id="clear">Clear</button>
+      </div>
+    </div>
+
+    <input class="search" id="search" placeholder="Search places" maxlength="40">
+    <div class="list" id="list"></div>
+  </div>
+
+</div>
+
+<script src="app.js"></script>

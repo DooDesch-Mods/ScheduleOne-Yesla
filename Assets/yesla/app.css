@@ -1,0 +1,145 @@
+/* Yesla. A dark map-first screen: the map takes the room, a narrow side column carries the car, the destination
+   and the place list. Landscape only, 733 x 400. */
+
+:root {
+  --bg: #0f1012;
+  --panel: #18191c;
+  --raised: #202226;
+  --line: #2a2c31;
+  --text: #f1f1f2;
+  --muted: #8d9096;
+  --accent: #3e6ae1;
+  --accent-hi: #5a82ee;
+  --accent-lo: #3157bd;
+  --warn: #e5484d;
+  --ok: #3fb950;
+}
+
+body {
+  height: 100%;
+  font-family: game-ui;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.app { height: 100%; flex-direction: row; background: var(--bg); }
+
+/* ---- map ---------------------------------------------------------------------------------------------------- */
+
+.viewport { position: relative; flex: 1; min-width: 0; overflow: hidden; touch-action: none; background: #1b1d21; }
+
+/* 2048 map units at 1250.8 css px for zoom 1; every size below is stated because the renderer cannot read a
+   picture's own size. */
+.world { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; transform-origin: 0 0; }
+.map { display: block; width: 1250.8px; height: 1250.8px; }
+.nomap { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; background: #1b1d21; display: none; }
+.nomap.on { display: flex; }
+.layer { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; }
+
+.spot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  background: #c9ccd1;
+  border: 1px solid #0f1012;
+}
+.spot.quest { background: #f2c94c; }
+.spot.property { background: #4a9cf3; }
+.spot.customer { background: #d38be8; }
+.spot.dealer { background: #81c4ff; }
+.spot.supplier { background: #f2994a; }
+.spot.stash { background: #c4544f; }
+.spot.vehicle { background: #7d8590; }
+
+.me { position: absolute; width: 22px; height: 22px; border-radius: 11px; background: #4ea7ff33; }
+.me .dot {
+  position: absolute; left: 7px; top: 7px; width: 8px; height: 8px; border-radius: 4px;
+  background: #4ea7ff; border: 1px solid #ffffff;
+}
+
+/* The car seen from above, nose up before rotation. */
+.car {
+  position: absolute; width: 9px; height: 16px; border-radius: 3px;
+  background: #ffffff; border: 1px solid #0f1012; align-items: center;
+}
+.car .nose { width: 5px; height: 3px; margin-top: 2px; border-radius: 1px; background: #3e6ae1; }
+
+.dest {
+  position: absolute; width: 16px; height: 16px; border-radius: 8px;
+  background: var(--accent); border: 2px solid #ffffff; align-items: center; justify-content: center;
+}
+.dest .core { width: 4px; height: 4px; border-radius: 2px; background: #ffffff; }
+
+.pending {
+  position: absolute; width: 16px; height: 16px; border-radius: 8px;
+  border: 2px solid #ffffff; background: #3e6ae155;
+}
+
+.hidden { display: none; }
+
+.tag {
+  position: absolute; left: 8px; right: 8px; bottom: 8px; padding: 5px 8px; border-radius: 6px;
+  background: #0f1012dd; color: var(--text); font-size: 11px; text-align: center; display: none;
+}
+.tag.on { display: flex; }
+
+.locate {
+  position: absolute; right: 8px; top: 8px; height: 24px; padding: 0 10px; border-radius: 6px;
+  background: #0f1012dd; border: 1px solid var(--line); color: var(--text); font-size: 11px;
+  align-items: center; justify-content: center;
+}
+.locate:hover { background: #202226; }
+
+/* ---- side column --------------------------------------------------------------------------------------------- */
+
+.side { width: 262px; flex: none; padding: 10px; gap: 8px; background: var(--panel); border-left: 1px solid var(--line); }
+
+.head { gap: 2px; }
+.title { font-size: 16px; font-weight: 700; }
+.sub { font-size: 11px; color: var(--muted); }
+.sub.live { color: var(--ok); }
+
+.card { padding: 9px; gap: 3px; border-radius: 8px; background: var(--raised); border: 1px solid var(--line); }
+.card-label { font-size: 10px; color: var(--muted); }
+.card-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-line { font-size: 11px; color: var(--muted); }
+.card-line.warn { color: var(--warn); }
+.card-line.live { color: var(--ok); }
+
+.actions { flex-direction: row; gap: 6px; margin-top: 6px; }
+.btn {
+  height: 26px; padding: 0 10px; border-radius: 6px; background: #2c2f35; color: var(--text);
+  font-size: 11px; font-weight: 600; align-items: center; justify-content: center;
+}
+.btn:hover { background: #363a41; }
+.btn:active { background: #25282d; }
+.btn:disabled { background: #222428; color: #5d6066; }
+.btn.primary { flex: 1; background: var(--accent); }
+.btn.primary:hover { background: var(--accent-hi); }
+.btn.primary:active { background: var(--accent-lo); }
+.btn.primary:disabled { background: #283456; color: #7f8aa8; }
+
+.search {
+  height: 26px; padding: 0 9px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line);
+  color: var(--text); font-size: 11px; align-items: center;
+}
+
+.list { flex: 1; min-height: 0; overflow-y: auto; gap: 2px; }
+
+.row { flex-direction: row; align-items: center; gap: 7px; padding: 5px 6px; border-radius: 6px; }
+.row:hover { background: var(--raised); }
+.row.on { background: #263052; }
+.row .swatch { width: 7px; height: 7px; border-radius: 4px; background: #c9ccd1; flex: none; }
+.row .swatch.quest { background: #f2c94c; }
+.row .swatch.property { background: #4a9cf3; }
+.row .swatch.customer { background: #d38be8; }
+.row .swatch.dealer { background: #81c4ff; }
+.row .swatch.supplier { background: #f2994a; }
+.row .swatch.stash { background: #c4544f; }
+.row .swatch.vehicle { background: #7d8590; }
+.row .text { flex: 1; min-width: 0; gap: 1px; }
+.row .name { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row .meta { font-size: 10px; color: var(--muted); }
+.empty { padding: 8px 6px; font-size: 11px; color: var(--muted); }

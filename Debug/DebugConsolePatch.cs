@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
 using Il2CppFishNet;
+using Il2CppScheduleOne;
 using Il2CppScheduleOne.Vehicles;
 using Il2CppScheduleOne.Vehicles.AI;
 using Yesla.Driving;
@@ -66,9 +67,13 @@ namespace Yesla.Debugging
                         Say("go prop <name>     - destination = a property (code or part of its name)");
                         Say("go <x> <y> <z>     - destination = a world position");
                         Say("engage / stop      - start or stop assisted driving (same as the key)");
+                        Say("steer <x>          - set the steering axis like a key press (0 releases it)");
+                        Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
+                        Say("fp eye <x> <y> <z> - eye position in the seat's local space");
                         Say("clear              - forget the destination");
                         Say("spawn [code] [m] [yaw] - spawn a player-owned car ahead (default hounddog, 8 m, yaw 0)");
                         Say("enter              - get into the nearest owned car within 10 m");
+                        Say("tp <x> <y> <z>     - move the local player (works on a client too)");
                         Say("tograph            - put the car onto the nearest road (vanilla teleporter)");
                         Say("diag               - road AI internals: target speed, throttle, sensors, path");
                         Say("path [from] [n]    - the planned path points (x,z) with sharp turns marked");
@@ -200,6 +205,54 @@ namespace Yesla.Debugging
                     case "engage":
                         Say(Autopilot.Engage(out string why) ? "engaged. " + Autopilot.Describe() : "cannot engage: " + why);
                         break;
+
+                    case "steer":
+                    {
+                        // Writes the steering axis the way a key press does (GameInput sets it only on an input
+                        // event, so it holds until 'yesla steer 0' or the next real key).
+                        float x = 1f;
+                        if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out x);
+                        GameInput.MotionAxis = new Vector2(x, GameInput.MotionAxis.y);
+                        Say("steering axis set to " + x.ToString("F2", CultureInfo.InvariantCulture) + ". " + Autopilot.Describe());
+                        break;
+                    }
+
+                    case "tp":
+                    {
+                        // Moves the local player; the vanilla 'teleport' command only runs on the host.
+                        if (parts.Length < 5
+                            || !float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out float tx)
+                            || !float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float ty)
+                            || !float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float tz))
+                        { Say("usage: yesla tp <x> <y> <z>"); break; }
+                        LandVehicle inCar = Autopilot.CurrentCar();
+                        if (inCar != null) { Say("tp: get out of " + inCar.VehicleName + " first"); inCar.ExitVehicle(); }
+                        PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance.Teleport(new Vector3(tx, ty, tz), false);
+                        Say("tp: player moved to " + new Vector3(tx, ty, tz).ToString("F1"));
+                        break;
+                    }
+
+                    case "navcheck":
+                        NavCheck.Run();
+                        Say("navcheck runs - see the [NavCheck] lines in the log");
+                        break;
+
+                    case "fp":
+                    {
+                        // 'fp' toggles like the view key, 'fp on|off', 'fp eye <x> <y> <z>' moves the eye in seat space.
+                        string arg = parts.Length > 2 ? parts[2].ToLowerInvariant() : "";
+                        if (arg == "eye" && parts.Length > 5
+                            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float ex)
+                            && float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float ey)
+                            && float.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out float ez))
+                            FirstPerson.EyeOffset = new Vector3(ex, ey, ez);
+                        else if (arg == "on") FirstPerson.Set(true, "console");
+                        else if (arg == "off") FirstPerson.Set(false, "console");
+                        else if (arg == "") FirstPerson.Set(!FirstPerson.Active, "console");
+                        else { Say("usage: yesla fp [on|off] | yesla fp eye <x> <y> <z>"); break; }
+                        Say(FirstPerson.Describe());
+                        break;
+                    }
 
                     case "stop":
                         Autopilot.Disengage("console stop");

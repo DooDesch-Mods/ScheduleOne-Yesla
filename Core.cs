@@ -26,6 +26,7 @@ namespace Yesla
             Log = LoggerInstance;
 
             Preferences.Initialize();
+            Phone.YeslaApp.Register();
 
             // No PatchAll here: MelonLoader applies the [HarmonyPatch] classes of a MelonMod itself, and a second
             // PatchAll runs every prefix and postfix twice per call.
@@ -43,7 +44,7 @@ namespace Yesla
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             _inWorld = sceneName == "Main";
-            if (!_inWorld) Autopilot.Reset();
+            if (!_inWorld) ResetWorld();
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
@@ -61,7 +62,16 @@ namespace Yesla
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
         {
             _inWorld = false;
+            ResetWorld();
+        }
+
+        private static void ResetWorld()
+        {
             Autopilot.Reset();
+            DestinationMarker.Reset();
+            KeyHint.Reset();
+            FirstPerson.Reset();
+            Phone.YeslaApp.Reset();
         }
 
         public override void OnUpdate()
@@ -72,6 +82,10 @@ namespace Yesla
             Debugging.DebugConsolePatch.FlushToConsole();
 #endif
             Autopilot.Tick();
+            DestinationMarker.Tick();
+            FirstPerson.Tick();
+            KeyHint.Tick();
+            Phone.YeslaApp.Tick();
         }
 
         public override void OnLateUpdate()

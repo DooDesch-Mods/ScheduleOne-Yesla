@@ -67,6 +67,7 @@ namespace Yesla.Driving
         {
             LandVehicle car = CurrentCar();
             if (car == null) { why = "not in a car"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
+            if (!Phone.YeslaApp.IsYesla(car)) { why = "not a Yesla"; Core.Log.Msg("[Autopilot] engage refused: " + why + " (" + car.VehicleCode + ")"); return false; }
             if (!car.LocalPlayerIsDriver) { why = "not in the driver seat"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
             if (Destination == null) { why = "no destination"; Core.Log.Msg("[Autopilot] engage refused: " + why); return false; }
             if (car.Agent == null) { why = "this car has no road AI"; Core.Log.Warning("[Autopilot] engage refused: " + why); return false; }
