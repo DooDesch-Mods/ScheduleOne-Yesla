@@ -1,61 +1,67 @@
-using System.Collections.Generic;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using Il2CppScheduleOne.Vehicles;
+using Il2CppScheduleOne.Vehicles.Modification;
 using Sideload.Api;
 
 namespace Yesla.Phone
 {
     /// <summary>
-    /// A studio photo of the player's own Yesla, taken off the car in the world, for the phone app: its real paint,
-    /// plate, lamps and wheels. Published as <c>s1://yesla-car-photo-&lt;n&gt;</c>; CarPicture's baked renders stay
-    /// the fallback for a car that cannot be photographed.
+    /// Studio photos of the player's own Yesla in its real paint, for the phone app, published as
+    /// <c>s1://yesla-car-photo-&lt;set&gt;-&lt;view&gt;</c>. <see cref="Views"/> photos around the car ship with the mod
+    /// twice, once rendered with white paint and once with black (Debug/CarBake.cs). Light on paint is linear in the
+    /// paint colour, so any paint is <c>black + colour * (white - black)</c>, worked out per pixel in linear light;
+    /// everything that is not paint comes out exactly as rendered.
     ///
-    /// The car's renderers move to the visualisation's layer for the one render and back right after, so a camera
-    /// that sees only that layer sees only the car, wherever it stands. The lighting is the visualisation's trade:
-    /// sun, ambient, fog and the game's renderer features are swapped for the call and restored. The camera is
-    /// rendered twice, over black and over white; the difference between the two is the car's coverage, which gives
-    /// a clean cut-out including the tinted glass.
-    ///
-    /// The car is shown from where the player's camera stands, turned about the vertical axis only. A set of
-    /// <see cref="Views"/> photos around the car is rendered one per frame while the app is on screen; the page stacks
-    /// them and shows the one nearest the camera, which is a repaint rather than a page rebuild. The view the camera
-    /// needs right now is rendered first, so the app has a photo after one frame and the full set a few frames later.
+    /// The mixing and the PNG encoding run on worker threads in plain C#, the view the player's camera needs first.
+    /// The page stacks the views and shows the one nearest the camera, which is a repaint rather than a page rebuild.
+    /// CarPicture's single drawn picture stays the fallback when the photos cannot be read.
     /// </summary>
     internal static class CarPhoto
     {
-        private const int Layer = Visual.VizScene.Layer;
         // Twice the 276 x 190 css box, so the phone's own scaling has detail to work with.
-        private const int Width = 552, Height = 380;
-        private const float FieldOfView = 22f;
+        internal const int Width = 552, Height = 380;
         /// <summary>Photos around the car, one every 15 degrees.</summary>
         internal const int Views = 24;
-        private const float ViewStep = 360f / Views;
-        // A little above the car, like a brochure shot: rise per metre of horizontal distance.
-        private const float Elevation = 0.244f;
+        internal const float ViewStep = 360f / Views;
         // Front left, for a camera that sits inside the car.
         private const int DefaultView = 21;
         // A camera closer than this to the car's middle, in metres, is inside it.
         private const float InsideRadius = 2.5f;
-        private const float Fill = 0.94f;                 // share of the picture width the car takes
-        private const float ShadowAlpha = 0.55f;
+        private const string ResourcePrefix = "Yesla.Assets.views.";
 
-        private static Camera _cam;
-        private static Light _key, _rim;
-        private static RenderTexture _msaa, _flat;
-        private static string _shownKey = "";
-        private static string _current;
-        private static int _serial;
+        /// <summary>sRGB byte to linear light.</summary>
+        internal static readonly float[] ToLinear = MakeToLinear();
+        /// <summary>Linear light to an sRGB byte, sampled finely enough that neighbouring entries differ by at most one step.</summary>
+        internal const int GammaSteps = 4096;
+        internal static readonly byte[] ToSrgb = MakeToSrgb();
+
+        private sealed class Done
+        {
+            internal int Set, View;
+            internal byte[] Png;
+            internal string Error;
+            internal double DecodeMs, MixMs, EncodeMs, ReadyAt; // ReadyAt: SetWatch time when the worker finished
+        }
+
+        private static readonly ConcurrentQueue<Done> Finished = new ConcurrentQueue<Done>();
+        private static readonly object SourceLock = new object();
+        private static byte[][] _white, _black;
+        private static int _set;
         private static bool _failed;
 
+        private static string _shownKey = "";
+        private static string _current;
         private static string[] _views;
         private static string[] _pending;
-        private static LandVehicle _pendingCar;
-        private static int[] _order;
-        private static int _orderAt;
-        private static double _pendingMs, _slowestMs;
+        private static int _pendingLeft, _pendingFirst;
+        private static readonly System.Diagnostics.Stopwatch SetWatch = new System.Diagnostics.Stopwatch();
+        private static string _firstStages = string.Empty;
+        private static double _firstMs;
         private static int _lastView = -1;
-        // Milliseconds per stage of Take over the set in progress: prepare, render, restore, cut-out, encode.
-        private static readonly double[] Stages = new double[5];
-        private static readonly System.Diagnostics.Stopwatch StageWatch = new System.Diagnostics.Stopwatch();
 
         /// <summary>The image name of the newest photo, or null when there is none.</summary>
         internal static string Current => _current;
@@ -67,85 +73,83 @@ namespace Yesla.Phone
         internal static int Revision { get; private set; }
 
         /// <summary>
-        /// Takes a new photo when the car, its paint or its plate changed, or when <paramref name="force"/> asks for one
-        /// (the app has just been opened). Returns true when a new picture was published.
+        /// Starts a new set of photos when the car or its paint changed, or when <paramref name="force"/> asks for one
+        /// and there is no set yet. The photos arrive through <see cref="Step"/>. True when a set was started.
         /// </summary>
-        internal static bool Update(AppHandle app, LandVehicle car, string plate, bool force)
+        internal static bool Update(AppHandle app, LandVehicle car, bool force)
         {
             if (app == null || _failed) return false;
             if (car == null || !car.gameObject.activeInHierarchy) return false;
-            string key = car.Pointer.ToInt64() + "|" + car.OwnedColor + "|" + plate;
-            if (!force && key == _shownKey) return false;
+            Color paint = PaintOf(car);
+            string key = car.Pointer.ToInt64() + "|" + paint.r.ToString("F3") + "," + paint.g.ToString("F3") + "," + paint.b.ToString("F3");
+            if (key == _shownKey && !(force && _views == null && _pending == null)) return false;
             _shownKey = key;
 
-            // A set still being rendered for the old look is dropped; its finished photos go with it.
-            if (_pending != null) Drop(app, _pending, "the car, its paint or its plate changed");
-            _serial++;
+            // A set still being mixed for the old paint is dropped; its finished photos go with it.
+            if (_pending != null) Drop(app, _pending, "the car or its paint changed");
+            int set = Interlocked.Increment(ref _set);
             _pending = new string[Views];
-            _pendingCar = car;
-            _pendingMs = _slowestMs = 0;
-            System.Array.Clear(Stages, 0, Stages.Length);
+            _pendingLeft = Views;
             int first = ViewOf(car);
-            _order = new int[Views];
-            _order[0] = first;
+            _pendingFirst = first;
+            var order = new int[Views];
+            order[0] = first;
             for (int i = 1, n = 1; n < Views; i++)
             {
-                _order[n++] = (first + i) % Views;
-                if (n < Views) _order[n++] = (first - i + Views) % Views;
+                order[n++] = (first + i) % Views;
+                if (n < Views) order[n++] = (first - i + Views) % Views;
             }
-            _orderAt = 0;
-            Core.Log.Msg("[CarPhoto] photographing " + car.VehicleName + " (" + car.OwnedColor + ", plate '" + plate + "') from " + Views + " sides, view " + first + " first.");
-
-            // The view the camera needs now, at once: the app shows it until the whole set is done.
-            if (!Step(app)) return false;
+            Color linear = paint.linear;
+            float r = linear.r, g = linear.g, b = linear.b;
+            SetWatch.Restart();
+            _firstMs = -1;
+            Core.Log.Msg("[CarPhoto] mixing " + car.VehicleName + " in " + car.OwnedColor + " (linear " + r.ToString("F3") + ", " + g.ToString("F3") + ", " + b.ToString("F3")
+                         + "), view " + first + " first.");
+            Task.Run(() => Work(set, r, g, b, order));
             return true;
         }
 
         /// <summary>
-        /// Renders the next view of the set in progress. Call once a frame while the app is on screen; true while
-        /// the set is going well or finished, false when it was given up.
+        /// Publishes the photos the workers have finished. Call once a frame while the app is on screen. True when the
+        /// picture on screen changed, so the page should hear of it now rather than at the next pulse.
         /// </summary>
         internal static bool Step(AppHandle app)
         {
-            if (_pending == null || app == null) return true;
-            LandVehicle car = _pendingCar;
-            if (car == null || !car.gameObject.activeInHierarchy)
+            if (app == null) return false;
+            bool shown = false;
+            while (Finished.TryDequeue(out Done d))
             {
-                Drop(app, _pending, "the car is gone");
+                if (d.Set != _set || _pending == null) continue;
+                if (d.Error != null)
+                {
+                    Core.Log.Error("[CarPhoto] " + d.Error + " - the app keeps the drawn car picture.");
+                    _failed = true;
+                    Drop(app, _pending, null);
+                    _pending = null;
+                    return shown;
+                }
+                string name = "yesla-car-photo-" + d.Set + "-" + d.View;
+                app.Image(name, d.Png);
+                _pending[d.View] = name;
+                if (d.View == _pendingFirst)
+                {
+                    _firstMs = SetWatch.Elapsed.TotalMilliseconds;
+                    _firstStages = "decode " + d.DecodeMs.ToString("0") + ", mix " + d.MixMs.ToString("0") + ", encode " + d.EncodeMs.ToString("0")
+                                 + ", worker done at " + d.ReadyAt.ToString("0") + ", " + (d.Png.Length / 1024) + " KB";
+                    SetCurrent(app, name);
+                    shown = true;
+                }
+                if (--_pendingLeft > 0) continue;
+
+                string[] old = _views;
+                _views = _pending;
                 _pending = null;
-                _shownKey = "";
-                return false;
+                if (old != null) Drop(app, old, null);
+                Revision++;
+                Core.Log.Msg("[CarPhoto] " + Views + " views ready: first after " + _firstMs.ToString("0") + " ms, all after " + SetWatch.Elapsed.TotalMilliseconds.ToString("0") + " ms (first: "
+                             + _firstStages + ").");
             }
-
-            int view = _order[_orderAt];
-            var watch = System.Diagnostics.Stopwatch.StartNew();
-            byte[] png = Take(car, view * ViewStep);
-            watch.Stop();
-            if (png == null)
-            {
-                Drop(app, _pending, "view " + view + " could not be photographed");
-                _pending = null;
-                return false;
-            }
-            _pendingMs += watch.Elapsed.TotalMilliseconds;
-            _slowestMs = System.Math.Max(_slowestMs, watch.Elapsed.TotalMilliseconds);
-
-            string name = "yesla-car-photo-" + _serial + "-" + view;
-            app.Image(name, png);
-            _pending[view] = name;
-            if (_orderAt == 0) _current = name;
-            _orderAt++;
-            if (_orderAt < Views) return true;
-
-            if (_views != null) Drop(app, _views, null);
-            _views = _pending;
-            _pending = null;
-            Revision++;
-            Core.Log.Msg("[CarPhoto] " + Views + " views of " + car.VehicleName + " ready: " + _pendingMs.ToString("0") + " ms in all, slowest "
-                         + _slowestMs.ToString("0") + " ms, last " + (png.Length / 1024) + " KB. Stages: prepare " + Stages[0].ToString("0")
-                         + ", render " + Stages[1].ToString("0") + ", restore " + Stages[2].ToString("0") + ", cut-out " + Stages[3].ToString("0")
-                         + ", encode " + Stages[4].ToString("0") + " ms.");
-            return true;
+            return shown;
         }
 
         /// <summary>
@@ -171,374 +175,175 @@ namespace Yesla.Phone
 
         internal static void Reset()
         {
+            Interlocked.Increment(ref _set);
+            while (Finished.TryDequeue(out _)) { }
             _shownKey = "";
             _current = null;
             _views = null;
             _pending = null;
-            _pendingCar = null;
             _lastView = -1;
+        }
+
+        /// <summary>The paint as the car shows it: its paint material's colour, or the paint library's for its paint name.</summary>
+        private static Color PaintOf(LandVehicle car)
+        {
+            VehicleColor vc = car.Color;
+            if (vc != null && vc.BodyMeshes != null && vc.BodyMeshes.Length > 0 && vc.BodyMeshes[0] != null && vc.BodyMeshes[0].Renderer != null)
+            {
+                var mats = vc.BodyMeshes[0].Renderer.sharedMaterials;
+                int i = vc.BodyMeshes[0].MaterialIndex;
+                if (mats != null && i >= 0 && i < mats.Length && mats[i] != null) return mats[i].color;
+            }
+            if (Singleton<VehicleColors>.InstanceExists)
+            {
+                var lib = Singleton<VehicleColors>.Instance.colorLibrary;
+                for (int i = 0; i < lib.Count; i++)
+                    if (lib[i] != null && lib[i].color == car.OwnedColor) return lib[i].MaterialColor;
+            }
+            return Color.white;
+        }
+
+        private static void SetCurrent(AppHandle app, string name)
+        {
+            string old = _current;
+            _current = name;
+            if (old == null || old == name) return;
+            if (_views != null && System.Array.IndexOf(_views, old) >= 0) return;
+            if (_pending != null && System.Array.IndexOf(_pending, old) >= 0) return;
+            app.Image(old, null);
         }
 
         private static void Drop(AppHandle app, string[] names, string why)
         {
-            if (why != null) Core.Log.Warning("[CarPhoto] set of views dropped: " + why + ".");
+            if (why != null) Core.Log.Msg("[CarPhoto] set of views dropped: " + why + ".");
             foreach (string n in names)
                 if (n != null && n != _current) app.Image(n, null);
         }
 
-        private static bool Build()
+        // ---- worker threads: plain C# only, nothing that calls into the IL2CPP runtime ----
+
+        private static void Work(int set, float r, float g, float b, int[] order)
         {
-            if (_cam != null) return true;
             try
             {
-                var root = new GameObject("YeslaCarPhoto");
-                UnityEngine.Object.DontDestroyOnLoad(root);
-                root.hideFlags = HideFlags.HideAndDontSave;
-
-                var camGo = new GameObject("Camera") { layer = Layer };
-                camGo.transform.SetParent(root.transform, false);
-                _cam = camGo.AddComponent<Camera>();
-                _cam.enabled = false;
-                _cam.cullingMask = 1 << Layer;
-                _cam.clearFlags = CameraClearFlags.SolidColor;
-                _cam.fieldOfView = FieldOfView;
-                _cam.nearClipPlane = 0.3f;
-                _cam.farClipPlane = 60f;
-                _cam.allowHDR = false;
-
-                _key = StudioLight(root.transform, "Key", 1.25f, new Color(1f, 0.97f, 0.93f), LightShadows.Soft);
-                _rim = StudioLight(root.transform, "Rim", 0.55f, new Color(0.85f, 0.9f, 1f), LightShadows.None);
-
-                _msaa = new RenderTexture(Width, Height, 24, RenderTextureFormat.ARGB32) { name = "YeslaCarPhoto", antiAliasing = 8, hideFlags = HideFlags.DontSave };
-                _msaa.Create();
-                _flat = new RenderTexture(Width, Height, 0, RenderTextureFormat.ARGB32) { name = "YeslaCarPhotoResolved", hideFlags = HideFlags.DontSave };
-                _flat.Create();
-                _cam.targetTexture = _msaa;
-                return true;
+                LoadSources();
             }
             catch (System.Exception e)
             {
-                Core.Log.Error("[CarPhoto] building the studio failed - the app keeps the drawn car picture: " + e.Message);
-                _failed = true;
-                return false;
+                Finished.Enqueue(new Done { Set = set, View = -1, Error = "reading the baked car photos failed: " + e.Message });
+                return;
             }
+            One(set, order[0], r, g, b, first: true);
+            var options = new ParallelOptions { MaxDegreeOfParallelism = System.Math.Max(1, System.Environment.ProcessorCount / 2) };
+            Parallel.For(1, order.Length, options, i => One(set, order[i], r, g, b));
         }
 
-        private static Light StudioLight(Transform parent, string name, float intensity, Color colour, LightShadows shadows)
+        /// <param name="first">The view on screen: both sources decode side by side and the encoder skips its filter
+        /// search, so the new paint shows as soon as it can.</param>
+        private static void One(int set, int view, float r, float g, float b, bool first = false)
         {
-            var go = new GameObject(name) { layer = Layer };
-            go.transform.SetParent(parent, false);
-            Light l = go.AddComponent<Light>();
-            l.type = LightType.Directional;
-            l.intensity = intensity;
-            l.color = colour;
-            l.shadows = shadows;
-            l.cullingMask = 1 << Layer;
-            l.enabled = false;
-            return l;
-        }
-
-        private static byte[] Take(LandVehicle car, float yaw)
-        {
-            if (!Build()) return null;
-
-            var moved = new List<KeyValuePair<GameObject, int>>();
-            Light sun = RenderSettings.sun;
-            bool sunOn = sun != null && sun.enabled;
-            bool fog = RenderSettings.fog;
-            var ambientMode = RenderSettings.ambientMode;
-            Color sky = RenderSettings.ambientSkyColor, equator = RenderSettings.ambientEquatorColor, ground = RenderSettings.ambientGroundColor;
-            RenderTexture active = RenderTexture.active;
-            Texture2D black = null, white = null;
-            StageWatch.Restart();
+            if (Volatile.Read(ref _set) != set) return;
             try
             {
-                if (car.boundingBox == null) { Core.Log.Warning("[CarPhoto] " + car.VehicleName + " has no bounding box to aim at - the app keeps the drawn car picture."); return null; }
-                // The collider's own bounds, enabled or not: the box the road AI measures the car with.
-                Transform boxT = car.boundingBox.transform;
-                Bounds bounds = new Bounds(boxT.TransformPoint(car.boundingBox.center), Vector3.zero);
-                Vector3 h = car.boundingBox.size * 0.5f;
-                var corners = new Vector3[8];
-                for (int corner = 0; corner < 8; corner++)
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                byte[] w = null, k = null;
+                int ww = 0, wh = 0, bw = 0, bh = 0;
+                if (first)
+                    Parallel.Invoke(() => w = Png.Decode(_white[view], out ww, out wh), () => k = Png.Decode(_black[view], out bw, out bh));
+                else
                 {
-                    corners[corner] = boxT.TransformPoint(car.boundingBox.center + new Vector3((corner & 1) == 0 ? -h.x : h.x, (corner & 2) == 0 ? -h.y : h.y, (corner & 4) == 0 ? -h.z : h.z));
-                    bounds.Encapsulate(corners[corner]);
+                    w = Png.Decode(_white[view], out ww, out wh);
+                    k = Png.Decode(_black[view], out bw, out bh);
                 }
-                float carSize = bounds.extents.magnitude;
-
-                int skipped = 0;
-                foreach (Renderer r in car.GetComponentsInChildren<Renderer>(false))
-                {
-                    if (r == null || !r.enabled) continue;
-                    if (r.TryCast<MeshRenderer>() == null && r.TryCast<SkinnedMeshRenderer>() == null) continue;
-                    // Headlight beams and other light volumes reach far past the car and are not part of its look.
-                    if (r.bounds.extents.magnitude > carSize * 1.3f || (r.bounds.center - bounds.center).magnitude > carSize) { skipped++; continue; }
-                    moved.Add(new KeyValuePair<GameObject, int>(r.gameObject, r.gameObject.layer));
-                    r.gameObject.layer = Layer;
-                }
-                if (moved.Count == 0) { Core.Log.Warning("[CarPhoto] " + car.VehicleName + " has no visible renderer - the app keeps the drawn car picture."); return null; }
-                if (skipped > 0) Core.Log.Msg("[CarPhoto] left out " + skipped + " renderer(s) larger than the car, such as headlight beams.");
-
-                Aim(car.transform, bounds.center, corners, yaw);
-
-                Visual.VizScene.FeaturesOff();
-                if (sunOn) sun.enabled = false;
-                RenderSettings.sun = _key;
-                _key.enabled = true;
-                _rim.enabled = true;
-                RenderSettings.fog = false;
-                RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-                RenderSettings.ambientSkyColor = new Color(0.62f, 0.65f, 0.72f);
-                RenderSettings.ambientEquatorColor = new Color(0.42f, 0.43f, 0.46f);
-                RenderSettings.ambientGroundColor = new Color(0.16f, 0.16f, 0.17f);
-
-                Lap(0);
-                black = Shoot(Color.black);
-                white = Shoot(Color.white);
-                Lap(1);
+                if (ww != Width || wh != Height || bw != Width || bh != Height)
+                    throw new InvalidDataException("view " + view + " is " + ww + "x" + wh + " / " + bw + "x" + bh + ", not " + Width + "x" + Height);
+                double decode = sw.Elapsed.TotalMilliseconds;
+                byte[] mixed = Mix(w, k, r, g, b);
+                double mix = sw.Elapsed.TotalMilliseconds;
+                byte[] png = Png.Encode(mixed, Width, Height, false, System.IO.Compression.CompressionLevel.Fastest, quick: first);
+                double encode = sw.Elapsed.TotalMilliseconds;
+                Finished.Enqueue(new Done { Set = set, View = view, Png = png, DecodeMs = decode, MixMs = mix - decode, EncodeMs = encode - mix,
+                                            ReadyAt = SetWatch.Elapsed.TotalMilliseconds });
             }
             catch (System.Exception e)
             {
-                Core.Log.Error("[CarPhoto] photographing " + car.VehicleName + " failed - the app keeps the drawn car picture: " + e.Message);
-                return null;
-            }
-            finally
-            {
-                foreach (var m in moved) if (m.Key != null) m.Key.layer = m.Value;
-                if (_key != null) _key.enabled = false;
-                if (_rim != null) _rim.enabled = false;
-                RenderSettings.sun = sun;
-                if (sunOn) sun.enabled = true;
-                RenderSettings.fog = fog;
-                RenderSettings.ambientMode = ambientMode;
-                RenderSettings.ambientSkyColor = sky;
-                RenderSettings.ambientEquatorColor = equator;
-                RenderSettings.ambientGroundColor = ground;
-                RenderTexture.active = active;
-                Visual.VizScene.FeaturesBack();
-                Lap(2);
-            }
-
-            try
-            {
-                return Compose(black, white, car.transform);
-            }
-            catch (System.Exception e)
-            {
-                Core.Log.Error("[CarPhoto] cutting out the photo failed - the app keeps the drawn car picture: " + e.Message);
-                return null;
-            }
-            finally
-            {
-                UnityEngine.Object.Destroy(black);
-                UnityEngine.Object.Destroy(white);
+                Finished.Enqueue(new Done { Set = set, View = view, Error = "mixing view " + view + " failed: " + e.Message });
             }
         }
 
-        /// <summary>
-        /// Points the camera at the car from <paramref name="yaw"/> degrees around it (0 = straight ahead, negative =
-        /// the car's left) and a little above, and pulls back until the car's box fills the frame from that side.
-        /// A view from the front is narrower than one from the side, so each view gets its own distance.
-        /// </summary>
-        private static void Aim(Transform car, Vector3 centre, Vector3[] corners, float yaw)
+        private static void LoadSources()
         {
-            float rad = yaw * Mathf.Deg2Rad;
-            Vector3 dir = car.TransformDirection(new Vector3(Mathf.Sin(rad), Elevation, Mathf.Cos(rad)).normalized);
-            Quaternion look = Quaternion.LookRotation(-dir, Vector3.up);
-            Vector3 right = look * Vector3.right, up = look * Vector3.up, forward = look * Vector3.forward;
-            float tanH = Mathf.Tan(FieldOfView * 0.5f * Mathf.Deg2Rad) * Fill;
-            float tanW = tanH * Width / Height;
-            // A corner at (x, y, z) from the centre in camera axes sits at depth distance + z; it fits when
-            // |x| <= tanW * (distance + z), and the same for y.
-            float distance = 0f;
-            foreach (Vector3 corner in corners)
+            lock (SourceLock)
             {
-                Vector3 v = corner - centre;
-                float z = Vector3.Dot(v, forward);
-                distance = Mathf.Max(distance, Mathf.Abs(Vector3.Dot(v, right)) / tanW - z, Mathf.Abs(Vector3.Dot(v, up)) / tanH - z);
-            }
-            _cam.transform.position = centre + dir * distance;
-            _cam.transform.rotation = look;
-
-            // Key light high from the camera's left, rim light low from behind the car on the right.
-            _key.transform.rotation = Quaternion.LookRotation(Quaternion.AngleAxis(-35f, Vector3.up) * Flat(-dir) + Vector3.down * 1.3f, Vector3.up);
-            _rim.transform.rotation = Quaternion.LookRotation(Quaternion.AngleAxis(150f, Vector3.up) * Flat(-dir) + Vector3.down * 0.35f, Vector3.up);
-        }
-
-        private static Vector3 Flat(Vector3 v)
-        {
-            v.y = 0f;
-            return v.sqrMagnitude > 0.0001f ? v.normalized : Vector3.forward;
-        }
-
-        private static Texture2D Shoot(Color background)
-        {
-            // A camera added at runtime has no URP camera data, so URP does not clear for it.
-            RenderTexture.active = _msaa;
-            GL.Clear(true, true, background);
-            _cam.backgroundColor = background;
-            _cam.Render();
-            Graphics.Blit(_msaa, _flat);
-            RenderTexture.active = _flat;
-            var tex = new Texture2D(Width, Height, TextureFormat.RGBA32, false);
-            tex.ReadPixels(new Rect(0, 0, Width, Height), 0, 0);
-            tex.Apply(false, false);
-            return tex;
-        }
-
-        /// <summary>
-        /// Coverage from the two shots, in linear light: over black a pixel is <c>a * c</c>, over white
-        /// <c>a * c + (1 - a)</c>. A soft ground shadow under the car's footprint goes in behind it.
-        /// </summary>
-        private static byte[] Compose(Texture2D black, Texture2D white, Transform car)
-        {
-            Tables();
-            byte[] b = Bytes(black), w = Bytes(white);
-            float[] shadow = Shadow(car);
-            var outTex = new Texture2D(Width, Height, TextureFormat.RGBA32, false);
-            var px = new Color32[Width * Height];
-            for (int i = 0; i < px.Length; i++)
-            {
-                int o = i * 4;
-                float br = _toLinear[b[o]], bg = _toLinear[b[o + 1]], bb = _toLinear[b[o + 2]];
-                float a = 1f - ((_toLinear[w[o]] - br) + (_toLinear[w[o + 1]] - bg) + (_toLinear[w[o + 2]] - bb)) / 3f;
-                a = a < 0f ? 0f : a > 1f ? 1f : a;
-                float s = shadow[i] * (1f - a);
-                float alpha = a + s;
-                if (alpha <= 0.002f) { px[i] = new Color32(0, 0, 0, 0); continue; }
-                // Premultiplied car over a black shadow, then back to straight alpha for the PNG.
-                float inv = 1f / alpha;
-                px[i] = new Color32(Srgb(br * inv), Srgb(bg * inv), Srgb(bb * inv), (byte)(alpha * 255f + 0.5f));
-            }
-            Lap(3);
-            outTex.SetPixels32(px);
-            outTex.Apply(false, false);
-            byte[] png = ImageConversion.EncodeToPNG(outTex);
-            UnityEngine.Object.Destroy(outTex);
-            Lap(4);
-            return png;
-        }
-
-        /// <summary>
-        /// The texture's RGBA bytes in one copy. Reading an IL2CPP array element by element crosses into the runtime
-        /// for every pixel, which made one photo take seconds.
-        /// </summary>
-        private static byte[] Bytes(Texture2D tex)
-        {
-            var native = tex.GetPixels32();
-            var bytes = new byte[native.Length * 4];
-            // An IL2CPP array's elements follow its header: class, monitor, bounds and length, one pointer each.
-            System.Runtime.InteropServices.Marshal.Copy(System.IntPtr.Add(native.Pointer, 4 * System.IntPtr.Size), bytes, 0, bytes.Length);
-
-            int last = native.Length - 1;
-            Color32 first = native[0], end = native[last];
-            if (bytes[0] == first.r && bytes[1] == first.g && bytes[2] == first.b && bytes[3] == first.a
-                && bytes[last * 4] == end.r && bytes[last * 4 + 3] == end.a)
-                return bytes;
-
-            Core.Log.Error("[CarPhoto] the block copy of the pixels does not match the texture - reading them one by one, which is slow.");
-            for (int i = 0; i < native.Length; i++)
-            {
-                Color32 c = native[i];
-                bytes[i * 4] = c.r; bytes[i * 4 + 1] = c.g; bytes[i * 4 + 2] = c.b; bytes[i * 4 + 3] = c.a;
-            }
-            return bytes;
-        }
-
-        private static void Lap(int stage)
-        {
-            Stages[stage] += StageWatch.Elapsed.TotalMilliseconds;
-            StageWatch.Restart();
-        }
-
-        /// <summary>
-        /// Shadow strength per pixel: the car's footprint on the ground, projected into the picture, with a soft edge.
-        /// </summary>
-        private static float[] Shadow(Transform car)
-        {
-            var result = new float[Width * Height];
-            LandVehicle lv = car.GetComponent<LandVehicle>();
-            if (lv == null || lv.boundingBox == null) { Core.Log.Warning("[CarPhoto] no bounding box on the car - the photo has no ground shadow."); return result; }
-
-            Transform box = lv.boundingBox.transform;
-            Vector3 size = lv.boundingBox.size;
-            Vector3 c = lv.boundingBox.center;
-            float groundY = float.MaxValue;
-            if (lv.wheels != null)
-                foreach (Wheel wh in lv.wheels)
-                    if (wh != null && wh.wheelCollider != null) groundY = Mathf.Min(groundY, wh.wheelCollider.transform.position.y - wh.wheelCollider.radius);
-            if (groundY == float.MaxValue) groundY = box.TransformPoint(c - new Vector3(0f, size.y * 0.5f, 0f)).y;
-
-            float[] qx = new float[4], qy = new float[4];
-            float[] sx = { -0.5f, 0.5f, 0.5f, -0.5f }, sz = { -0.5f, -0.5f, 0.5f, 0.5f };
-            for (int k = 0; k < 4; k++)
-            {
-                Vector3 p = box.TransformPoint(c + new Vector3(size.x * sx[k] * 0.92f, 0f, size.z * sz[k] * 0.96f));
-                p.y = groundY;
-                Vector3 sp = _cam.WorldToScreenPoint(p);
-                // Screen y runs up, the picture's rows run down after ReadPixels' bottom-up order - both bottom-up here.
-                qx[k] = sp.x * Width / _cam.pixelWidth;
-                qy[k] = sp.y * Height / _cam.pixelHeight;
-            }
-
-            float soft = Width * 0.045f;
-            for (int y = 0; y < Height; y++)
-                for (int x = 0; x < Width; x++)
+                if (_white != null) return;
+                var white = new byte[Views][];
+                var black = new byte[Views][];
+                Assembly asm = Assembly.GetExecutingAssembly();
+                for (int v = 0; v < Views; v++)
                 {
-                    float d = SignedDistance(x + 0.5f, y + 0.5f, qx, qy);
-                    float t = 0.5f - d / (2f * soft);
-                    t = t < 0f ? 0f : t > 1f ? 1f : t;
-                    result[y * Width + x] = ShadowAlpha * t * t * (3f - 2f * t);
+                    white[v] = Resource(asm, "w" + v.ToString("00") + ".png");
+                    black[v] = Resource(asm, "b" + v.ToString("00") + ".png");
                 }
-            return result;
-        }
-
-        /// <summary>
-        /// Distance to a convex quad's edge, negative inside, either winding. Plain floats on purpose: Vector2 and
-        /// Mathf members are calls into the IL2CPP runtime, and this runs for every pixel.
-        /// </summary>
-        private static float SignedDistance(float px, float py, float[] qx, float[] qy)
-        {
-            float best = float.MaxValue;
-            bool inside = true;
-            int sign = 0;
-            for (int i = 0; i < 4; i++)
-            {
-                int j = (i + 1) & 3;
-                float abx = qx[j] - qx[i], aby = qy[j] - qy[i], apx = px - qx[i], apy = py - qy[i];
-                float len2 = abx * abx + aby * aby;
-                float t = (apx * abx + apy * aby) / (len2 > 1e-6f ? len2 : 1e-6f);
-                t = t < 0f ? 0f : t > 1f ? 1f : t;
-                float dx = apx - abx * t, dy = apy - aby * t;
-                float dist = (float)System.Math.Sqrt(dx * dx + dy * dy);
-                if (dist < best) best = dist;
-                float cross = abx * apy - aby * apx;
-                int side = cross > 0f ? 1 : cross < 0f ? -1 : 0;
-                if (sign == 0) sign = side;
-                else if (side != 0 && side != sign) inside = false;
+                _black = black;
+                _white = white;
             }
-            return inside ? -best : best;
         }
 
-        private static float[] _toLinear;
-        // Linear light to an sRGB byte, sampled finely enough that neighbouring entries differ by at most one step.
-        private const int GammaSteps = 4096;
-        private static byte[] _toSrgb;
-
-        private static void Tables()
+        private static byte[] Resource(Assembly asm, string file)
         {
-            if (_toLinear != null) return;
-            _toLinear = new float[256];
-            for (int i = 0; i < 256; i++) _toLinear[i] = Mathf.GammaToLinearSpace(i / 255f);
-            _toSrgb = new byte[GammaSteps + 1];
-            for (int i = 0; i <= GammaSteps; i++) _toSrgb[i] = (byte)Mathf.RoundToInt(Mathf.Clamp01(Mathf.LinearToGammaSpace(i / (float)GammaSteps)) * 255f);
+            using Stream s = asm.GetManifestResourceStream(ResourcePrefix + file);
+            if (s == null) throw new FileNotFoundException(ResourcePrefix + file + " is not in the mod");
+            var ms = new MemoryStream();
+            s.CopyTo(ms);
+            return ms.ToArray();
         }
 
-        private static byte Srgb(float linear)
+        /// <summary>Per pixel and channel <c>black + paint * (white - black)</c> in linear light; the coverage is the white shot's.</summary>
+        private static byte[] Mix(byte[] white, byte[] black, float r, float g, float b)
         {
-            if (!(linear > 0f)) return 0;
-            if (linear >= 1f) return 255;
-            return _toSrgb[(int)(linear * GammaSteps + 0.5f)];
+            var o = new byte[white.Length];
+            for (int i = 0; i < white.Length; i += 4)
+            {
+                byte a = white[i + 3];
+                if (a == 0) continue;
+                o[i] = Channel(black[i], white[i], r);
+                o[i + 1] = Channel(black[i + 1], white[i + 1], g);
+                o[i + 2] = Channel(black[i + 2], white[i + 2], b);
+                o[i + 3] = a;
+            }
+            return o;
+        }
+
+        private static byte Channel(byte black, byte white, float paint)
+        {
+            if (black == white) return black;
+            float lb = ToLinear[black];
+            float v = lb + paint * (ToLinear[white] - lb);
+            int i = (int)(v * GammaSteps + 0.5f);
+            return ToSrgb[i < 0 ? 0 : i > GammaSteps ? GammaSteps : i];
+        }
+
+        private static float[] MakeToLinear()
+        {
+            var t = new float[256];
+            for (int i = 0; i < 256; i++)
+            {
+                double v = i / 255.0;
+                t[i] = (float)(v <= 0.04045 ? v / 12.92 : System.Math.Pow((v + 0.055) / 1.055, 2.4));
+            }
+            return t;
+        }
+
+        private static byte[] MakeToSrgb()
+        {
+            var t = new byte[GammaSteps + 1];
+            for (int i = 0; i <= GammaSteps; i++)
+            {
+                double v = i / (double)GammaSteps;
+                double s = v <= 0.0031308 ? v * 12.92 : 1.055 * System.Math.Pow(v, 1 / 2.4) - 0.055;
+                t[i] = (byte)System.Math.Clamp((int)System.Math.Round(s * 255.0), 0, 255);
+            }
+            return t;
         }
     }
 }

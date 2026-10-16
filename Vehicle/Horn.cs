@@ -34,19 +34,20 @@ namespace Yesla.Vehicle
             catch (Exception e) { Core.Log.Error("[Horn] could not play the horn: " + e); }
         }
 
-        /// <summary>Everyone: one chirp when the car locks, two when it unlocks.</summary>
+        /// <summary>Everyone: two chirps when the car locks, one when it unlocks.</summary>
         internal static void Chirp(LandVehicle car, bool locked)
         {
             if (car == null) { Core.Log.Warning("[Horn] lock chirp for a car that is gone."); return; }
             if (!Clips.PlayAt(car, "chirp", "YeslaHorn", 0.7f)) return;
-            if (!locked) MelonCoroutines.Start(SecondChirp(car));
+            if (locked) MelonCoroutines.Start(SecondChirp(car));
             Core.Log.Msg("[Horn] " + (locked ? "lock" : "unlock") + " chirp on " + car.VehicleName + " #" + Fleet.NetId(car) + ".");
         }
 
         private static IEnumerator SecondChirp(LandVehicle car)
         {
             yield return new WaitForSeconds(0.22f);
-            if (car != null) Clips.PlayAt(car, "chirp", "YeslaHorn", 0.7f);
+            if (car == null) { Core.Log.Warning("[Horn] second lock chirp: the car is gone."); yield break; }
+            if (Clips.PlayAt(car, "chirp", "YeslaHorn", 0.7f)) Core.Log.Msg("[Horn] second lock chirp on " + car.VehicleName + " #" + Fleet.NetId(car) + ".");
         }
 
         /// <summary>Host: flash the headlights twice and leave them as they were.</summary>

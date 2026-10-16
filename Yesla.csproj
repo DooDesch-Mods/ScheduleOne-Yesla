@@ -220,6 +220,10 @@
     <EmbeddedResource Include="Assets/car_w.png;Assets/car_b.png">
       <LogicalName>Yesla.Assets.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+    <!-- The app's car photos: 24 views around the car, white paint (w) and black paint (b), from 'yesla bake' (Phone/CarPhoto.cs). -->
+    <EmbeddedResource Include="Assets/views/*.png">
+      <LogicalName>Yesla.Assets.views.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
   <!-- The car model, embedded so the mod stays a single file. Read by Vehicle/YeslaModel.cs. -->

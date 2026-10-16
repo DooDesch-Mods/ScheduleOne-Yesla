@@ -195,6 +195,20 @@ function apply() {
   worldEl.style.transform = 'translate(' + tx.toFixed(1) + 'px, ' + ty.toFixed(1) + 'px) scale(' + zoom.toFixed(3) + ')';
 }
 
+// Zooms and centres the map so both points show, clear of the search field at the top and the card at the bottom.
+var FIT_SIDE = 36, FIT_TOP = 52, FIT_BOTTOM = 64;
+function fitTo(a, b) {
+  if (!a || !b) return;
+  var v = view();
+  var w = Math.max(40, v.w - 2 * FIT_SIDE), h = Math.max(40, v.h - FIT_TOP - FIT_BOTTOM);
+  var dx = Math.abs(a.x - b.x) * WORLD, dy = Math.abs(a.y - b.y) * WORLD;
+  zoom = Math.min(ZOOM_MAX, w / Math.max(dx, 1), h / Math.max(dy, 1));
+  var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+  tx = v.w / 2 - cx * WORLD * zoom;
+  ty = FIT_TOP + h / 2 - cy * WORLD * zoom;
+  apply();
+}
+
 function zoomAt(next, px, py) {
   if (next < ZOOM_MIN) next = ZOOM_MIN;
   if (next > ZOOM_MAX) next = ZOOM_MAX;
@@ -609,7 +623,7 @@ function send() {
   if (!selected) {
     var going = state.summon && state.summon.state === 'Going';
     if (!going && !state.dest) return;
-    control(going ? 'yesla.summon' : 'yesla.goto');
+    if (control(going ? 'yesla.summon' : 'yesla.goto') && !going) fitTo(state.car, state.dest);
     return;
   }
   var r = selected.type === 'place'
@@ -718,7 +732,10 @@ TABS.forEach(function (id) { $('t-' + id).addEventListener('click', function () 
 
 $('send').addEventListener('click', send);
 $('clear').addEventListener('click', clear);
-$('c-summon').addEventListener('click', function () { control('yesla.summon'); });
+$('c-summon').addEventListener('click', function () {
+  var coming = state.summon && (state.summon.state === 'Coming' || state.summon.state === 'Going');
+  if (control('yesla.summon') && !coming) fitTo(state.car, state.player);
+});
 $('c-honk').addEventListener('click', function () { control('yesla.honk'); });
 $('c-lock').addEventListener('click', function () { control('yesla.lock'); });
 $('c-sentry').addEventListener('click', function () { control('yesla.sentry'); });

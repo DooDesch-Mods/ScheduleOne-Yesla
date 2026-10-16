@@ -24,6 +24,10 @@ namespace Yesla.Driving
     ///   (a parked car, a bin) - shift the aim point to the left of the path and crawl past it.
     /// - Reverse: the car stands still although it wants to move, or the obstacle is too close to swing out - back
     ///   up straight for a couple of metres, then carry on.
+    /// - Turn: the path runs behind the car (it stands the wrong way round) - turn in moves at full lock, forward and
+    ///   back, each move ending before the body touches something, until the nose points along the path.
+    /// - Avoid: something standing in the lane ahead, such as a parked car - with the other lane clear, move over early
+    ///   and pass it at speed instead of stopping behind it first.
     ///
     /// Runs as a postfix of <c>VehicleAgent.InfrequentUpdate</c>, after vanilla wrote its targets and before
     /// <c>LateUpdate</c> turns them into throttle and steer. Only cars handed in through <see cref="Attach"/> are
@@ -32,7 +36,7 @@ namespace Yesla.Driving
     [HarmonyPatch(typeof(VehicleAgent), nameof(VehicleAgent.InfrequentUpdate))]
     internal static class PathFollower
     {
-        private enum Manoeuvre { Follow, Reverse, Bypass }
+        private enum Manoeuvre { Follow, Reverse, Bypass, Turn }
 
         /// <summary>Lookahead in metres: the minimum, how much it grows per m/s, and the cap.</summary>
         private const float MinLookahead = 4f;
@@ -88,6 +92,27 @@ namespace Yesla.Driving
         private const float ReverseSpeedKmh = 5f;
         /// <summary>Reverse throttle while slower than <see cref="ReverseSpeedKmh"/> backwards.</summary>
         private const float ReverseThrottle = 1f;
+
+        /// <summary>
+        /// Turning in moves: starts below <see cref="TurnBelowKmh"/> when the path runs more than <see cref="TurnAbove"/>
+        /// degrees away from the nose, ends within <see cref="TurnDone"/>. A move forward or back ends after its length,
+        /// its time, or <see cref="TurnClearance"/> metres before the body would touch something.
+        /// </summary>
+        private const float TurnAbove = 110f, TurnDone = 30f, TurnBelowKmh = 10f, TurnKmh = 5f, TurnBackKmh = 4f;
+        private const float TurnForwardMax = 7f, TurnBackMax = 4f, TurnStepSeconds = 7f, TurnClearance = 0.5f;
+        /// <summary>Throttle that moves the car at a crawl forwards in a turn; vanilla's regulator gives too little to climb a kerb.</summary>
+        private const float TurnThrottle = 0.6f;
+        private const int MaxTurnSteps = 7;
+        /// <summary>Standing this long held by something at the car's corner means it will not come free by waiting.</summary>
+        private const float HeldSeconds = 2f;
+
+        /// <summary>
+        /// Passing something standing in the lane: the car keeps <see cref="AvoidMargin"/> metres from it, moves over at
+        /// most <see cref="AvoidMax"/> metres (one lane), starts no closer than <see cref="AvoidMinAhead"/> metres and
+        /// passes at up to <see cref="AvoidKmh"/>. Oncoming cars within <see cref="AvoidOncoming"/> metres past it keep
+        /// the car in its lane.
+        /// </summary>
+        private const float AvoidMargin = 0.6f, AvoidMax = 3.4f, AvoidMinAhead = 5f, AvoidKmh = 25f, AvoidPassed = 1.5f, AvoidOncoming = 45f;
 
         private const float BypassOffset = 2.6f;
         private const float BypassLength = 14f;
@@ -162,6 +187,20 @@ namespace Yesla.Driving
             internal IntPtr RampSeen;              // the ramp last driven onto, logged once
             internal bool OnLine;                  // the car has reached the line once; the start can be off it
             internal float VanillaFollowRate = -1f; // the agent's own steering rate, put back on detach
+
+            internal int TurnDir = 1;              // +1 forward, -1 back, in a turn
+            internal int TurnSide = 1;             // +1 the nose swings right, -1 left
+            internal int TurnSteps;
+            internal int TurnDrive;                // what LateTick pushes: +1 forward, -1 back, 0 nothing
+            internal Vector3 StepFrom;
+            internal float StepStart, StallFor, HeldFor;
+
+            internal float Avoid;                  // metres to the left the car moves to pass something standing
+            internal Transform AvoidBody;
+            internal Vector3 AvoidCentre;
+            internal float AvoidHalf;
+            internal string AvoidWhat = string.Empty;
+            internal IntPtr AvoidRefused;
         }
 
         private static readonly Dictionary<IntPtr, Follow> Cars = new Dictionary<IntPtr, Follow>();
@@ -317,23 +356,35 @@ namespace Yesla.Driving
             TrackLine(f, pts, seg, lerp, pos, car, now);
             if (f.Reverses > 0 && Vector3.Distance(pos, f.LastReverseAt) > ProgressResetsReverses) f.Reverses = 0;
 
+            // Heading error to the path a little ahead: reversing with the wheels turned against it swings the nose back
+            // towards the path, the first half of a three-point turn.
+            float headingError = HeadingError(path, car, pos, seg, lerp);
+            f.TurnDrive = 0;
             if (f.Manoeuvre == Manoeuvre.Reverse)
             {
-                // Heading error to the path a little ahead: reversing with the wheels turned against it swings the
-                // nose back towards the path, the first half of a three-point turn.
-                Vector3 ahead = PathUtility.GetAheadPoint(path, pos, MinLookahead * 2f, seg, lerp);
-                Vector3 toAhead = ahead - pos; toAhead.y = 0f;
-                Vector3 fwdFlat = car.transform.forward; fwdFlat.y = 0f;
-                float headingError = ahead == Vector3.zero || toAhead.sqrMagnitude < 0.01f ? 0f : Vector3.SignedAngle(fwdFlat, toAhead, Vector3.up);
                 Reverse(f, agent, car, now, headingError);
                 f.LastLine = "REVERSE " + Vector3.Distance(pos, f.ManoeuvreFrom).ToString("F1") + " m";
                 LogLine(f, now);
                 return;
             }
+            if (f.Manoeuvre == Manoeuvre.Turn)
+            {
+                Turn(f, agent, car, now, dt, headingError, pos);
+                f.LastLine = "TURN move " + (f.TurnSteps + 1) + " " + (f.TurnDir > 0 ? "forward" : "back") + " " + Vector3.Distance(pos, f.StepFrom).ToString("F1")
+                           + " m, heading " + headingError.ToString("F0") + " deg off, speed " + car.Speed_Kmh.ToString("F0");
+                LogLine(f, now);
+                return;
+            }
+            if (f.Manoeuvre == Manoeuvre.Follow && Mathf.Abs(car.Speed_Kmh) < TurnBelowKmh && Mathf.Abs(headingError) > TurnAbove)
+            {
+                StartTurn(f, car, headingError, "the path runs " + Mathf.Abs(headingError).ToString("F0") + " deg away from the nose");
+                agent.targetSpeed = 0f;
+                return;
+            }
 
             if (f.Manoeuvre == Manoeuvre.Bypass && Vector3.Distance(pos, f.ManoeuvreFrom) > BypassLength && !FrontBlocked(agent, 3f))
                 SetManoeuvre(f, Manoeuvre.Follow, pos, "past the obstacle");
-            f.Offset = Mathf.MoveTowards(f.Offset, f.Manoeuvre == Manoeuvre.Bypass ? BypassOffset : 0f, OffsetRate * dt);
+            f.Offset = Mathf.MoveTowards(f.Offset, f.Manoeuvre == Manoeuvre.Bypass ? BypassOffset : f.Avoid, OffsetRate * dt);
 
             float speedMs = Mathf.Abs(car.Speed_Kmh) / 3.6f;
             float lookahead = Mathf.Clamp(MinLookahead + speedMs * LookaheadPerMs, MinLookahead, MaxLookahead);
@@ -365,7 +416,7 @@ namespace Yesla.Driving
             bool cornerHit = f.CornerAt < float.MaxValue;
             f.Nudge = Mathf.MoveTowards(f.Nudge, cornerHit ? f.CornerSide * NudgeMetres : 0f, (cornerHit ? NudgeRate : NudgeRelax) * dt);
 
-            float swing = f.Manoeuvre == Manoeuvre.Follow && f.OnLine && !cornerHit ? BendSwing(pts, seg, pos) : 0f;
+            float swing = f.Manoeuvre == Manoeuvre.Follow && f.OnLine && !cornerHit && f.Avoid <= 0f ? BendSwing(pts, seg, pos) : 0f;
             f.Swing = Mathf.MoveTowards(f.Swing, swing, SwingRate * dt);
             Vector3 target = PathUtility.GetAheadPoint(path, pos, lookahead, seg, lerp);
             if (target == Vector3.zero) target = pts[pts.Count - 1];
@@ -386,10 +437,11 @@ namespace Yesla.Driving
             if (now >= f.NextPlan)
             {
                 f.NextPlan = now + PlanSeconds;
-                SpeedPlanner.Plan plan = SpeedPlanner.Run(car, agent, pts, seg, lerp, f.Profile);
+                SpeedPlanner.Plan plan = SpeedPlanner.Run(car, agent, pts, seg, lerp, f.Profile, f.Manoeuvre == Manoeuvre.Follow ? f.Avoid : 0f);
                 f.PlanKmh = plan.Kmh;
                 f.PlanWhy = plan.Why;
                 ApplyFlags(agent, f.Profile, f.PlanKmh);
+                if (f.Manoeuvre == Manoeuvre.Follow) UpdateAvoid(f, car, plan, pos);
             }
             float planned = f.PlanKmh;
             float heading = Mathf.Abs(alpha) * Mathf.Rad2Deg;
@@ -399,6 +451,10 @@ namespace Yesla.Driving
             if (cornerKmh < agent.targetSpeed) agent.targetSpeed = cornerKmh;
             if (agent.targetSpeed < 1f && planned > 3f && f.Manoeuvre == Manoeuvre.Follow && OnRamp(f, agent, car))
                 agent.targetSpeed = Mathf.Min(planned, RampKmh);
+            // Passing something standing: vanilla's sensors still see it beside the car and slow for it, but the lane
+            // the car moved into was swept clear by the planner, which also brakes for anything that turns up there.
+            if (f.Avoid > 0f && f.Manoeuvre == Manoeuvre.Follow)
+                agent.targetSpeed = Mathf.Min(planned, AvoidKmh, cornerKmh);
 
             if (f.Manoeuvre == Manoeuvre.Bypass)
             {
@@ -423,6 +479,8 @@ namespace Yesla.Driving
             }
             if (cornerKmh < agent.targetSpeed) agent.targetSpeed = cornerKmh;
             CheckWedged(f, agent, car, dt);
+            if (f.Manoeuvre == Manoeuvre.Reverse || f.Manoeuvre == Manoeuvre.Turn) return;
+            CheckHeld(f, car, dt, cornerHit && cornerKmh < 1f, headingError);
 
             f.LastLine = f.Manoeuvre + " seg=" + seg + "/" + pts.Count + " look=" + lookahead.ToString("F1") + " alpha=" + heading.ToString("F0")
                        + " steer=" + steer.ToString("F2") + " plan=" + f.PlanKmh.ToString("F0") + " (" + f.PlanWhy + ") target=" + agent.targetSpeed.ToString("F0")
@@ -430,7 +488,8 @@ namespace Yesla.Driving
                        + " offset=" + f.Offset.ToString("F1") + " cte=" + f.Cte.ToString("F1") + " worst L/R=" + f.WorstLeft.ToString("F1") + "/" + f.WorstRight.ToString("F1")
                        + " wait=" + f.WaitFor.ToString("F1") + (cornerHit ? " corner=" + f.CornerWhat + "@" + f.CornerAt.ToString("F1") : "")
                        + (Mathf.Abs(f.Nudge) > 0.05f ? " nudge=" + f.Nudge.ToString("F1") : "")
-                       + (Mathf.Abs(f.Swing) > 0.05f ? " swing=" + f.Swing.ToString("F1") : "");
+                       + (Mathf.Abs(f.Swing) > 0.05f ? " swing=" + f.Swing.ToString("F1") : "")
+                       + (f.Avoid > 0f ? " avoid=" + f.Avoid.ToString("F1") + " (" + f.AvoidWhat + ")" : "");
             LogLine(f, now);
         }
 
@@ -665,9 +724,269 @@ namespace Yesla.Driving
             if (why == null) return;
 
             agent.targetSpeed = 0f;
-            // Swinging out only makes sense while roughly lined up with the road; turned away, turn back first.
-            if (f.BypassAfterReverse && Mathf.Abs(headingError) < 60f) SetManoeuvre(f, Manoeuvre.Bypass, car.transform.position, why + ", swinging out");
+            // Swinging out only makes sense while roughly lined up with the road; turned away, turn in moves first.
+            if (Mathf.Abs(headingError) >= 60f) StartTurn(f, car, headingError, why + ", still " + Mathf.Abs(headingError).ToString("F0") + " deg off the path");
+            else if (f.BypassAfterReverse) SetManoeuvre(f, Manoeuvre.Bypass, car.transform.position, why + ", swinging out");
             else SetManoeuvre(f, Manoeuvre.Follow, car.transform.position, why);
+        }
+
+        /// <summary>Heading error in degrees from the nose to the path a little ahead, + to the right.</summary>
+        private static float HeadingError(PathSmoothingUtility.SmoothedPath path, LandVehicle car, Vector3 pos, int seg, float lerp)
+        {
+            Vector3 ahead = PathUtility.GetAheadPoint(path, pos, MinLookahead * 2f, seg, lerp);
+            Vector3 toAhead = ahead - pos; toAhead.y = 0f;
+            Vector3 fwdFlat = car.transform.forward; fwdFlat.y = 0f;
+            return ahead == Vector3.zero || toAhead.sqrMagnitude < 0.01f ? 0f : Vector3.SignedAngle(fwdFlat, toAhead, Vector3.up);
+        }
+
+        /// <summary>
+        /// Standing still because something at the car's corner holds it, which waiting does not change: turn in moves
+        /// when the car points away from the path, otherwise back up and carry on.
+        /// </summary>
+        private static void CheckHeld(Follow f, LandVehicle car, float dt, bool heldByCorner, float headingError)
+        {
+            f.HeldFor = heldByCorner && Mathf.Abs(car.Speed_Kmh) < 1f ? f.HeldFor + dt : 0f;
+            if (f.HeldFor < HeldSeconds) return;
+            f.HeldFor = 0f;
+            string why = "held for " + HeldSeconds.ToString("F0") + " s by " + f.CornerWhat + " " + f.CornerAt.ToString("F1") + " m from the car's "
+                       + (f.CornerSide < 0 ? "left" : f.CornerSide > 0 ? "right" : "front");
+            if (Mathf.Abs(headingError) > 45f) StartTurn(f, car, headingError, why);
+            else
+            {
+                f.BypassAfterReverse = false;
+                StartReverse(f, car, why);
+            }
+        }
+
+        private static void StartTurn(Follow f, LandVehicle car, float headingError, string why)
+        {
+            Vector3 pos = car.transform.position;
+            f.TurnSide = Mathf.Abs(headingError) > 150f ? RoomierSide(car) : headingError > 0f ? 1 : -1;
+            f.TurnDir = 1;
+            f.TurnSteps = 0;
+            SetManoeuvre(f, Manoeuvre.Turn, pos, why + ", turning " + (f.TurnSide > 0 ? "right" : "left") + " in moves");
+            f.StepFrom = pos;
+            f.StepStart = Time.time;
+            f.StallFor = 0f;
+        }
+
+        /// <summary>+1 when there is more room to the car's right than to its left, else -1.</summary>
+        private static int RoomierSide(LandVehicle car)
+        {
+            Transform t = car.transform;
+            Vector3 from = t.position + Vector3.up * 0.8f;
+            Vector3 right = t.right; right.y = 0f; right.Normalize();
+            float r = Free(car, from, right), l = Free(car, from, -right);
+            Core.Log.Msg("[PathFollower] room beside the car: " + l.ToString("F1") + " m left, " + r.ToString("F1") + " m right.");
+            return r >= l ? 1 : -1;
+        }
+
+        private static float Free(LandVehicle car, Vector3 from, Vector3 dir)
+        {
+            const float Reach = 15f;
+            var hits = Physics.RaycastAll(from, dir, Reach, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+            float best = Reach;
+            for (int i = 0; i < hits.Length; i++)
+            {
+                Collider c = hits[i].collider;
+                if (c == null || c.transform.IsChildOf(car.transform) || Footprint.Aboard(c, car)) continue;
+                if (hits[i].distance < best) best = hits[i].distance;
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// One tick of turning in moves. Forward the wheels turn towards the path, back away from it, so each move
+        /// swings the nose further round; the wheels are set before the car moves, as a driver does in a tight spot.
+        /// </summary>
+        private static void Turn(Follow f, VehicleAgent agent, LandVehicle car, float now, float dt, float headingError, Vector3 pos)
+        {
+            if (Mathf.Abs(headingError) < TurnDone)
+            {
+                agent.targetSpeed = 0f;
+                SetManoeuvre(f, Manoeuvre.Follow, pos, "lined up after " + (f.TurnSteps + 1) + " move(s), " + Mathf.Abs(headingError).ToString("F0") + " deg off");
+                return;
+            }
+            float steer = f.TurnDir > 0 ? f.TurnSide : -f.TurnSide;
+            agent.targetSteerAngle_Normalized = steer;
+            float lockNow = car.ActualMaxSteeringAngle > 0.1f ? car.CurrentSteerAngle / car.ActualMaxSteeringAngle : 0f;
+            bool wheelsSet = Mathf.Abs(lockNow - steer) < 0.25f;
+            agent.targetSpeed = !wheelsSet ? 0f : f.TurnDir > 0 ? TurnKmh : -TurnBackKmh;
+            f.TurnDrive = wheelsSet ? f.TurnDir : 0;
+
+            float moved = Vector3.Distance(pos, f.StepFrom);
+            f.StallFor = wheelsSet && Mathf.Abs(car.Speed_Kmh) < 0.5f && now - f.StepStart > 1f ? f.StallFor + dt : 0f;
+            string end = null;
+            if (wheelsSet && Footprint.Sweep(car, f.TurnDir, TurnClearance + 1f, out float at, out _, out _, out string what) && at < TurnClearance)
+                end = what + " " + at.ToString("F1") + " m " + (f.TurnDir > 0 ? "ahead" : "behind");
+            else if (moved > (f.TurnDir > 0 ? TurnForwardMax : TurnBackMax)) end = "moved " + moved.ToString("F1") + " m";
+            else if (now - f.StepStart > TurnStepSeconds) end = "move timed out after " + moved.ToString("F1") + " m";
+            else if (f.StallFor > 1.5f) end = "not moving";
+            // Backed round far enough that a forward move at full lock finishes the turn.
+            else if (f.TurnDir < 0 && moved > 1f && Mathf.Abs(headingError) < 75f) end = "nose round to " + Mathf.Abs(headingError).ToString("F0") + " deg";
+            if (end == null) return;
+
+            f.TurnSteps++;
+            if (f.TurnSteps >= MaxTurnSteps)
+            {
+                agent.targetSpeed = 0f;
+                f.TurnDrive = 0;
+                Core.Log.Warning("[PathFollower] " + f.Who + " could not turn round in " + MaxTurnSteps + " moves (" + end + ", heading "
+                                 + headingError.ToString("F0") + " deg off) - giving up.");
+                Action<string> giveUp = f.GiveUp;
+                f.GiveUp = null;
+                if (giveUp != null) giveUp("stuck");
+                else Core.Log.Warning("[PathFollower] " + f.Who + " already gave up - nothing more to stop.");
+                SetManoeuvre(f, Manoeuvre.Follow, pos, "turning given up");
+                return;
+            }
+            f.TurnDir = -f.TurnDir;
+            f.StepFrom = pos;
+            f.StepStart = now;
+            f.StallFor = 0f;
+            Core.Log.Msg("[PathFollower] " + f.Who + " turn move " + f.TurnSteps + " ended (" + end + "), heading " + headingError.ToString("F0")
+                         + " deg off - next move " + (f.TurnDir > 0 ? "forward" : "back") + ".");
+        }
+
+        /// <summary>
+        /// Decides whether to pass the thing the planner found standing in the lane, and ends a pass once the car is
+        /// by it. Moving traffic, people and a red light are waited for as before; a pass needs the lane beside the
+        /// thing swept clear and no oncoming car close.
+        /// </summary>
+        private static void UpdateAvoid(Follow f, LandVehicle car, SpeedPlanner.Plan plan, Vector3 pos)
+        {
+            Vector3 fwd = car.transform.forward; fwd.y = 0f; fwd.Normalize();
+            float halfLen = car.BoundingBoxDimensions.z * 0.5f;
+            if (f.Avoid > 0f)
+            {
+                if (f.AvoidBody == null) { EndAvoid(f, "the thing being passed is gone"); return; }
+                if (Vector3.Dot(f.AvoidCentre - pos, fwd) < -(f.AvoidHalf + halfLen + AvoidPassed)) EndAvoid(f, "past " + f.AvoidWhat);
+                return;
+            }
+
+            Collider c = plan.Blocker;
+            if (c == null || plan.BlockerIsStopLine || plan.BlockerAt < AvoidMinAhead || plan.BlockerSpeed > 0.3f) return;
+            Rigidbody rb = c.attachedRigidbody;
+            if (rb != null && !rb.isKinematic && rb.velocity.sqrMagnitude > 0.25f) return;
+            if (c.GetComponentInParent<Il2CppScheduleOne.PlayerScripts.Player>() != null) return;
+            if (c.GetComponentInParent<Il2CppScheduleOne.NPCs.NPC>() != null) return;
+            LandVehicle other = c.GetComponentInParent<LandVehicle>();
+            if (other != null && other.Agent != null && other.Agent.AutoDriving) return;
+
+            var ahead = SpeedPlanner.Ahead;
+            if (ahead.Count < 3) return;
+            int k = Mathf.Clamp(Mathf.RoundToInt(plan.BlockerAt / SpeedPlanner.SampleStep), 0, ahead.Count - 2);
+            Vector3 left = SpeedPlanner.Left(k);
+            if (left == Vector3.zero) return;
+            Vector3 along = new Vector3(left.z, 0f, -left.x);
+            Vector3 basePt = ahead[k];
+
+            // The thing's outline across the lane: a car's own box, anything else its collider's bounds.
+            var corners = new Vector3[8];
+            if (other != null && other.boundingBox != null)
+            {
+                Transform bt = other.boundingBox.transform;
+                Vector3 h = other.boundingBox.size * 0.5f, ctr = other.boundingBox.center;
+                for (int i = 0; i < 8; i++)
+                    corners[i] = bt.TransformPoint(ctr + new Vector3((i & 1) == 0 ? -h.x : h.x, (i & 2) == 0 ? -h.y : h.y, (i & 4) == 0 ? -h.z : h.z));
+            }
+            else
+            {
+                Bounds b = c.bounds;
+                for (int i = 0; i < 8; i++)
+                    corners[i] = new Vector3((i & 1) == 0 ? b.min.x : b.max.x, (i & 2) == 0 ? b.min.y : b.max.y, (i & 4) == 0 ? b.min.z : b.max.z);
+            }
+            float maxLeft = float.MinValue, minAlong = float.MaxValue, maxAlong = float.MinValue;
+            foreach (Vector3 corner in corners)
+            {
+                Vector3 v = corner - basePt; v.y = 0f;
+                maxLeft = Mathf.Max(maxLeft, Vector3.Dot(v, left));
+                float a = Vector3.Dot(v, along);
+                minAlong = Mathf.Min(minAlong, a);
+                maxAlong = Mathf.Max(maxAlong, a);
+            }
+            string what = other != null ? other.VehicleName + " (parked)" : (c.transform.parent != null ? c.transform.parent.name + "/" : "") + c.name;
+            float need = maxLeft + car.BoundingBoxDimensions.x * 0.5f + AvoidMargin;
+            if (need <= 0.2f) return;
+            if (need > AvoidMax) { RefuseAvoid(f, c, what + " reaches too far across the road - " + need.ToString("F1") + " m to pass it"); return; }
+            if (!LaneClear(car, c, other, k, need, maxAlong, out string busy)) { RefuseAvoid(f, c, "passing " + what + " waits: " + busy); return; }
+
+            f.Avoid = need;
+            f.AvoidBody = other != null ? other.transform : c.transform;
+            f.AvoidCentre = basePt + along * ((minAlong + maxAlong) * 0.5f);
+            f.AvoidHalf = (maxAlong - minAlong) * 0.5f;
+            f.AvoidWhat = what;
+            f.AvoidRefused = IntPtr.Zero;
+            Core.Log.Msg("[PathFollower] " + f.Who + ": " + what + " standing in the lane in " + plan.BlockerAt.ToString("F0") + " m - moving "
+                         + need.ToString("F1") + " m to the left to pass it.");
+        }
+
+        private static void RefuseAvoid(Follow f, Collider c, string why)
+        {
+            if (f.AvoidRefused == c.Pointer) return;
+            f.AvoidRefused = c.Pointer;
+            Core.Log.Msg("[PathFollower] " + f.Who + ": " + why + ".");
+        }
+
+        private static void EndAvoid(Follow f, string why)
+        {
+            Core.Log.Msg("[PathFollower] " + f.Who + " back into the lane: " + why + ".");
+            f.Avoid = 0f;
+            f.AvoidBody = null;
+            f.AvoidWhat = string.Empty;
+        }
+
+        /// <summary>
+        /// The lane <paramref name="shift"/> metres left of the path, from the car to 8 m past the thing being passed:
+        /// nothing standing in it, and no car coming the other way within <see cref="AvoidOncoming"/> metres.
+        /// </summary>
+        private static bool LaneClear(LandVehicle car, Collider blocker, LandVehicle blockerCar, int k, float shift, float pastAlong, out string busy)
+        {
+            busy = null;
+            var ahead = SpeedPlanner.Ahead;
+            Transform self = car.transform;
+            Transform seated = car.HumanoidColliderContainer != null ? car.HumanoidColliderContainer.transform : null;
+            Transform skip = blockerCar != null ? blockerCar.transform : blocker.transform;
+            int last = Mathf.Min(ahead.Count - 1, k + Mathf.CeilToInt((pastAlong + 8f) / SpeedPlanner.SampleStep));
+            for (int i = 1; i + 1 <= last; i++)
+            {
+                Vector3 from = ahead[i] + SpeedPlanner.Left(i) * shift + Vector3.up * 1f;
+                Vector3 to = ahead[i + 1] + SpeedPlanner.Left(i + 1) * shift + Vector3.up * 1f;
+                Vector3 d = to - from;
+                float len = d.magnitude;
+                if (len < 0.01f) continue;
+                var hits = Physics.SphereCastAll(from, 0.95f, d / len, len, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+                for (int h = 0; h < hits.Length; h++)
+                {
+                    Collider c = hits[h].collider;
+                    if (c == null) continue;
+                    Transform t = c.transform;
+                    if (t.IsChildOf(self) || t.IsChildOf(skip) || (seated != null && t.IsChildOf(seated)) || Footprint.Aboard(c, car)) continue;
+                    if (c.attachedRigidbody == null && hits[h].normal.y > 0.7f) continue;
+                    if (c.GetComponentInParent<VehicleObstacle>() != null) continue;
+                    busy = (t.parent != null ? t.parent.name + "/" : "") + c.name + " in the other lane " + (i * SpeedPlanner.SampleStep).ToString("F0") + " m ahead";
+                    return false;
+                }
+            }
+
+            var all = NetworkSingleton<VehicleManager>.InstanceExists ? NetworkSingleton<VehicleManager>.Instance.AllVehicles : null;
+            if (all == null) return true;
+            Vector3 basePt = ahead[0], left = SpeedPlanner.Left(0);
+            Vector3 fwd = new Vector3(left.z, 0f, -left.x);
+            for (int i = 0; i < all.Count; i++)
+            {
+                LandVehicle v = all[i];
+                if (v == null || v.Pointer == car.Pointer || v.Rb == null || (blockerCar != null && v.Pointer == blockerCar.Pointer)) continue;
+                Vector3 vel = v.Rb.velocity; vel.y = 0f;
+                if (vel.magnitude < 2f || Vector3.Dot(vel, fwd) > -1f) continue;
+                Vector3 rel = v.transform.position - basePt; rel.y = 0f;
+                float a = Vector3.Dot(rel, fwd), lat = Vector3.Dot(rel, left);
+                if (a < -5f || a > pastAlong + AvoidOncoming) continue;
+                if (Mathf.Abs(lat - shift) > 2.6f) continue;
+                busy = v.VehicleName + " coming the other way " + a.ToString("F0") + " m ahead";
+                return false;
+            }
+            return true;
         }
 
         /// <summary>
@@ -684,10 +1003,15 @@ namespace Yesla.Driving
             foreach (var kv in Cars)
             {
                 Follow f = kv.Value;
-                if (f.Manoeuvre != Manoeuvre.Reverse || f.Car == null) continue;
+                if (f.Car == null) continue;
                 LandVehicle car = f.Car;
                 if (car.Agent == null || !car.Agent.AutoDriving) continue;
-                if (car.Speed_Kmh > -ReverseSpeedKmh) car.throttleOverride = -ReverseThrottle;
+                if (f.Manoeuvre == Manoeuvre.Reverse || (f.Manoeuvre == Manoeuvre.Turn && f.TurnDrive < 0))
+                {
+                    if (car.Speed_Kmh > -(f.Manoeuvre == Manoeuvre.Turn ? TurnBackKmh : ReverseSpeedKmh)) car.throttleOverride = -ReverseThrottle;
+                }
+                else if (f.Manoeuvre == Manoeuvre.Turn && f.TurnDrive > 0 && car.Speed_Kmh < TurnKmh)
+                    car.throttleOverride = Mathf.Max(car.throttleOverride, TurnThrottle);
             }
         }
 
@@ -712,6 +1036,8 @@ namespace Yesla.Driving
         private static void SetManoeuvre(Follow f, Manoeuvre next, Vector3 at, string why)
         {
             Core.Log.Msg("[PathFollower] " + f.Who + " " + f.Manoeuvre + " -> " + next + " (" + why + ")");
+            if (next != Manoeuvre.Follow && f.Avoid > 0f) EndAvoid(f, "the " + next + " manoeuvre takes over");
+            f.HeldFor = 0f;
             f.Manoeuvre = next;
             f.ManoeuvreStart = Time.time;
             f.ManoeuvreFrom = at;
@@ -730,7 +1056,8 @@ namespace Yesla.Driving
         /// </summary>
         private static void TrackLine(Follow f, Il2CppSystem.Collections.Generic.List<Vector3> pts, int seg, float lerp, Vector3 pos, LandVehicle car, float now)
         {
-            if (f.Manoeuvre != Manoeuvre.Follow) { f.Cte = 0f; return; }
+            // Moved over on purpose (passing something standing) is not off the line.
+            if (f.Manoeuvre != Manoeuvre.Follow || Mathf.Abs(f.Offset) > 0.05f) { f.Cte = 0f; return; }
             Vector3 a = pts[seg], b = pts[seg + 1];
             Vector3 ab = b - a; ab.y = 0f;
             Vector3 on = Vector3.Lerp(a, b, lerp);

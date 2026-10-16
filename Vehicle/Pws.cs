@@ -19,6 +19,9 @@ namespace Yesla.Vehicle
         private const float FadeBand = 4f;
         private const float ReverseVolume = 0.3f, ForwardVolume = 0.08f, CabinFactor = 0.05f;
         private const float Rescan = 1f;
+        /// <summary>Off: the recording grated on the player at any volume. The code stays for a better recording.</summary>
+        private const bool Enabled = false;
+        private static bool _offLogged;
 
         private sealed class Entry
         {
@@ -37,6 +40,11 @@ namespace Yesla.Vehicle
 #if SNITCH
             using var __perf = Snitch.Api.Profiler.Sample("Yesla.Pws.Tick");
 #endif
+            if (!Enabled)
+            {
+                if (!_offLogged) { _offLogged = true; Core.Log.Msg("[Sound] pedestrian warning is switched off in this build."); }
+                return;
+            }
             if (_noClip) return;
             if (Time.unscaledTime >= _nextScan) { _nextScan = Time.unscaledTime + Rescan; Scan(); }
             for (int i = Cars.Count - 1; i >= 0; i--)

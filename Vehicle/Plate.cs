@@ -26,6 +26,8 @@ namespace Yesla.Vehicle
         private static readonly Color Panel = new Color(0.93f, 0.93f, 0.91f);
 
         private static float _nextTick;
+        /// <summary>While set, every Yesla plate reads this instead of its own text (the photo bake).</summary>
+        internal static string Override;
         private static int _seenRevision = -1;
         private static TMP_FontAsset _font;
         private static Vector2 _rect = new Vector2(0.4f, 0.08f);
@@ -113,7 +115,7 @@ namespace Yesla.Vehicle
                 TextMeshPro t = TextOf(v);
                 if (t == null) continue;
                 Fleet.Rec r = Fleet.For(v);
-                string text = r != null ? r.PlateText : string.Empty;
+                string text = Override ?? (r != null ? r.PlateText : string.Empty);
                 if (t.text == text) continue;
                 if (_font == null) _font = Visual.VizOverlay.FindFont();
                 if (_font != null && t.font != _font) t.font = _font;
@@ -157,6 +159,9 @@ namespace Yesla.Vehicle
             t.rectTransform.sizeDelta = _rect;
             t.text = string.Empty;
         }
+
+        /// <summary>Letters the plates on the next tick instead of within the second.</summary>
+        internal static void Refresh() => _nextTick = 0f;
 
         internal static void Reset()
         {

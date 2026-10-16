@@ -58,6 +58,7 @@ namespace Yesla.Visual
                 CenterScreen.Show(_car);
                 Cabin.Show(_car);
                 CabinLight.Show(_car, FirstPerson.Active);
+                CabinGlass.Show(_car, FirstPerson.Active);
             }
             catch (Exception e)
             {
@@ -92,6 +93,7 @@ namespace Yesla.Visual
             CenterScreen.Show(null);
             Cabin.Show(null);
             CabinLight.Show(null, false);
+            CabinGlass.Show(null, false);
         }
 
         internal static void Reset()
@@ -101,6 +103,7 @@ namespace Yesla.Visual
             CenterScreen.Reset();
             Cabin.Reset();
             CabinLight.Reset();
+            CabinGlass.Reset();
             VizHud.Destroy();
             VizScene.Destroy();
         }

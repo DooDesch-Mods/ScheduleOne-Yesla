@@ -65,7 +65,13 @@ namespace Yesla.Driving
             internal bool WokeUp;
             /// <summary>The lot spot failed and the car went back to the road to pull over; no second fallback.</summary>
             internal bool Fallback;
+            /// <summary>When the summoning player's position is next compared with <see cref="Target"/>.</summary>
+            internal float NextFollow;
         }
+
+        /// <summary>A summoned car heads for the player's new position once they have walked this far from the old one.</summary>
+        private const float FollowMove = 8f;
+        private const float FollowEvery = 1.5f;
 
         // Host: the running summons, by car network id.
         private static readonly Dictionary<int, Job> Jobs = new Dictionary<int, Job>();
@@ -470,6 +476,7 @@ namespace Yesla.Driving
                 // that was just occupied stays simulated, so the errand keeps it that way.
                 if (job.Car.Rb != null && job.Car.Rb.isKinematic && !job.WokeUp) { Core.Log.Msg("[Summon] #" + job.CarId + " is kinematic away from every player - keeping it physical for the errand."); job.WokeUp = true; }
                 job.Car.timeOnLastOccupied = Time.timeSinceLevelLoad;
+                if (!job.GoTo && !job.Parking && Time.time >= job.NextFollow) Follow(job);
                 if (job.Parking && !job.Fallback && job.Park != null && !job.Park.Kerb && !job.Manoeuvre && Time.time >= job.NextReach)
                 {
                     job.NextReach = Time.time + 0.25f;
@@ -480,6 +487,43 @@ namespace Yesla.Driving
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Summon: the player walked away from where they called the car, so it drives to where they are now.
+        /// Navigate replaces the running route without calling the old route's callback (VehicleAgent.Navigate).
+        /// </summary>
+        private static void Follow(Job job)
+        {
+            job.NextFollow = Time.time + FollowEvery;
+            Player owner = OwnerOf(job);
+            if (owner == null) { Core.Log.Warning("[Summon] #" + job.CarId + ": its owner " + job.Owner + " is not in the game - keeping the old target."); job.NextFollow = Time.time + 10f; return; }
+            Vector3 now = owner.transform.position;
+            float moved = Vector3.Distance(now, job.Target);
+            if (moved < FollowMove) return;
+            if (job.Car.Agent == null || !job.Car.Agent.AutoDriving)
+            {
+                Core.Log.Msg("[Summon] #" + job.CarId + ": " + job.Owner + " moved " + moved.ToString("F0") + " m, but the road AI is not driving yet - the target is updated for the start.");
+                job.Target = now;
+                return;
+            }
+            Core.Log.Msg("[Summon] #" + job.CarId + ": " + job.Owner + " moved " + moved.ToString("F0") + " m from " + job.Target.ToString("F0") + " - driving to " + now.ToString("F0") + " instead.");
+            job.Target = now;
+            job.Retries = 0;
+            job.Tried.Clear();
+            try { Go(job, now); }
+            catch (Exception e) { Core.Log.Error("[Summon] #" + job.CarId + " could not head for the player's new position: " + e.Message); }
+        }
+
+        private static Player OwnerOf(Job job)
+        {
+            var players = Player.PlayerList;
+            for (int i = 0; i < players.Count; i++)
+            {
+                Player p = players[i];
+                if (p != null && p.PlayerCode == job.Owner) return p;
+            }
+            return null;
         }
 
         private static float _nextSettledCheck;

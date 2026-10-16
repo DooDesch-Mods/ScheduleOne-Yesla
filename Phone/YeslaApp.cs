@@ -74,8 +74,8 @@ namespace Yesla.Phone
             using var __perf = Snitch.Api.Profiler.Sample("Yesla.YeslaApp.Tick");
 #endif
             if (_app == null) return;
-            if (_app.IsOnScreen) CarPhoto.Step(_app);
             float now = Time.unscaledTime;
+            if (_app.IsOnScreen && CarPhoto.Step(_app)) _nextPulse = now;
             if (now < _nextPulse) return;
             _nextPulse = now + PulseSeconds;
 
@@ -86,7 +86,7 @@ namespace Yesla.Phone
             LandVehicle mine = MyCar();
             MapRoute.Update(mine);
             Fleet.Rec mineRec = mine != null ? Fleet.For(mine) : null;
-            CarPhoto.Update(_app, mine, mineRec != null ? mineRec.PlateText : "", force: false);
+            CarPhoto.Update(_app, mine, force: false);
             int state = Revision();
             if (state != _pushedState)
             {
@@ -275,7 +275,7 @@ namespace Yesla.Phone
         }
 
         /// <summary>Repaint through the game's own path: saved with the car and sent to every player.</summary>
-        private static string Paint(string id)
+        internal static string Paint(string id)
         {
             LandVehicle car = MyCar();
             if (car == null) return "error:No Yesla.";
@@ -287,6 +287,8 @@ namespace Yesla.Phone
             }
             car.SendOwnedColor(paint);
             Core.Log.Msg("[App] " + car.VehicleName + " #" + Fleet.NetId(car) + " repainted " + paint + ".");
+            // Where the paint is already on the car (the host), the photos start now rather than at the next pulse.
+            CarPhoto.Update(_app, car, force: false);
             return "ok";
         }
 

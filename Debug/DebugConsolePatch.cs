@@ -470,7 +470,9 @@ namespace Yesla.Debugging
                         // Behind first, then the sides and the front: the first spot with a clear line to the car wins,
                         // so a tree or a wall behind the car does not end up in the shot.
                         Transform ct = car.transform;
-                        Vector3[] dirs = { -ct.forward, -ct.forward - ct.right, -ct.forward + ct.right, ct.right, -ct.right, ct.forward };
+                        Vector3[] dirs = parts.Length > 3 && parts[3] == "front"
+                            ? new[] { ct.forward - ct.right * 0.6f, ct.forward + ct.right * 0.6f, ct.forward, ct.right, -ct.right }
+                            : new[] { -ct.forward, -ct.forward - ct.right, -ct.forward + ct.right, ct.right, -ct.right, ct.forward };
                         Vector3 look = ct.position + Vector3.up * 0.7f;
                         Vector3 to = Vector3.zero;
                         string side = null;
@@ -503,7 +505,7 @@ namespace Yesla.Debugging
                         if (_overhead != null) { UnityEngine.Object.Destroy(_overhead); _overhead = null; }
                         if (arg == "off") { Say("overhead: off"); break; }
                         float height = 14f;
-                        if (arg.Length > 0) float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out height);
+                        if (arg.Length > 0 && arg != "front") float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out height);
                         LandVehicle car = Phone.YeslaApp.MyCar();
                         if (car == null) { Say("overhead: no own Yesla"); break; }
                         _overhead = new GameObject("Yesla_OverheadCam");
@@ -515,6 +517,16 @@ namespace Yesla.Debugging
                         Vector3 fwd = car.transform.forward; fwd.y = 0f;
                         _overhead.transform.position = car.transform.position + Vector3.up * height;
                         _overhead.transform.rotation = Quaternion.LookRotation(Vector3.down, fwd.normalized);
+                        if (arg == "front")
+                        {
+                            // 'overhead front': low and off to the left of the nose, looking across the head lamps, so
+                            // the lamp and the start of its beam are in one shot.
+                            Transform ct = car.transform;
+                            _overhead.transform.position = ct.position + ct.forward * 4.5f - ct.right * 3.5f + Vector3.up * 0.9f;
+                            _overhead.transform.rotation = Quaternion.LookRotation(ct.position + ct.forward * 3f + Vector3.up * 0.2f - _overhead.transform.position, Vector3.up);
+                            Say("overhead: camera beside the nose of " + car.VehicleName);
+                            break;
+                        }
                         Say("overhead: camera " + height.ToString("F0") + " m above " + car.VehicleName + " at " + car.transform.position.ToString("F1") + ", car yaw " + car.transform.eulerAngles.y.ToString("F0") + " deg (screen up = car forward)");
                         break;
                     }
@@ -715,6 +727,66 @@ namespace Yesla.Debugging
                             + " msaa=" + cam.allowMSAA + " hdr=" + cam.allowHDR + " fov=" + cam.fieldOfView.ToString("F0")
                             + " | main: " + (Camera.main != null ? Camera.main.name + " " + Camera.main.pixelWidth + "x" + Camera.main.pixelHeight : "none")
                             + " | render scale " + (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline?.TryCast<UnityEngine.Rendering.Universal.UniversalRenderPipelineAsset>() is { } urp ? urp.renderScale.ToString("F2") + " msaa " + urp.msaaSampleCount : "?"));
+                        break;
+                    }
+
+                    case "lamps":
+                    {
+                        // lamps on|off               - the headlights of the nearest own Yesla
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null || car.lights == null) { Say("lamps: no own Yesla with lights"); break; }
+                        car.lights.HeadlightsOn = parts.Length < 3 || parts[2] != "off";
+                        Say("lamps: headlights " + (car.lights.HeadlightsOn ? "on" : "off"));
+                        break;
+                    }
+
+                    case "repaint":
+                    {
+                        // repaint <paint>            - what the app's paint button does, e.g. repaint Red
+                        if (parts.Length < 3) { Say("repaint: name a paint, e.g. repaint Red"); break; }
+                        Say("repaint: " + Phone.YeslaApp.Paint(parts[2]));
+                        break;
+                    }
+
+                    case "bake":
+                    {
+                        // bake [dir]                 - render the app's car photos (white and black paint) into dir,
+                        //                              default UserData/YeslaViews; copy them to Assets/views
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("bake: no own Yesla"); break; }
+                        string dir = parts.Length > 2 ? string.Join(" ", parts, 2, parts.Length - 2)
+                                                      : System.IO.Path.Combine(MelonLoader.Utils.MelonEnvironment.UserDataDirectory, "YeslaViews");
+                        Say(CarBake.Start(car, dir, out string bakeWhy) ? "bake: started into " + dir + " - the log says when it is done" : "bake: " + bakeWhy);
+                        break;
+                    }
+
+                    case "paint":
+                    {
+                        // paint                      - report the paint finish of the nearest own Yesla
+                        // paint <metallic> <smooth>  - set it on every Yesla paint material in the scene
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("paint: no own Yesla"); break; }
+                        if (parts.Length > 3 && float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float met)
+                            && float.TryParse(parts[3], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float smooth))
+                        {
+                            Vehicle.YeslaBody.PaintMetallic = met;
+                            Vehicle.YeslaBody.PaintSmoothness = smooth;
+                        }
+                        int n = 0;
+                        foreach (LandVehicle v in UnityEngine.Object.FindObjectsOfType<LandVehicle>())
+                        {
+                            if (v == null || !Phone.YeslaApp.IsYesla(v)) continue;
+                            VehicleColor vc = v.Color;
+                            if (vc == null || vc.BodyMeshes == null) continue;
+                            foreach (var bm in vc.BodyMeshes)
+                            {
+                                if (bm == null || bm.Renderer == null) continue;
+                                Material m = bm.Renderer.materials[bm.MaterialIndex];
+                                Vehicle.YeslaBody.Finish(m);
+                                n++;
+                            }
+                        }
+                        Say("paint: metallic=" + Vehicle.YeslaBody.PaintMetallic.ToString("F2") + " smoothness=" + Vehicle.YeslaBody.PaintSmoothness.ToString("F2") + " on " + n + " paint material(s)");
                         break;
                     }
 

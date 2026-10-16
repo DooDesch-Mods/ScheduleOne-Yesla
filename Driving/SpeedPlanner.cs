@@ -55,10 +55,20 @@ namespace Yesla.Driving
         {
             internal float Kmh;
             internal string Why;
+            /// <summary>The nearest thing in the lane, or null: its collider, distance along the path and speed in m/s.</summary>
+            internal Collider Blocker;
+            internal float BlockerAt, BlockerSpeed;
+            internal bool BlockerIsStopLine;
         }
 
+        /// <summary>The resampled path ahead from the last <see cref="Run"/>, every <see cref="Step"/> metres.</summary>
+        internal static List<Vector3> Ahead => Samples;
+        internal const float SampleStep = Step;
+
+        /// <param name="shift">Metres to the left of the path the car is moving to (passing something standing in the
+        /// lane); the lane is swept there instead of on the path.</param>
         internal static Plan Run(LandVehicle car, VehicleAgent agent, Il2CppSystem.Collections.Generic.List<Vector3> pts,
-                                 int seg, float lerp, DriveProfile p)
+                                 int seg, float lerp, DriveProfile p, float shift = 0f)
         {
 #if SNITCH
             using var __perf = Snitch.Api.Profiler.Sample("Yesla.SpeedPlanner.Run");
@@ -119,8 +129,13 @@ namespace Yesla.Driving
             float scan = v * v / (2f * a) + reaction + p.StopGap + 12f;
             FindWalks(scan + 10f);
             float halfLength = car.BoundingBoxDimensions.z * 0.5f;
-            if (Obstacle(car, p, scan, out float at, out float gap, out float otherSpeed, out string what))
+            Plan result = default;
+            if (Obstacle(car, p, scan, shift, out float at, out float gap, out float otherSpeed, out string what, out Collider blocker, out bool stopLine))
             {
+                result.Blocker = blocker;
+                result.BlockerAt = at;
+                result.BlockerSpeed = otherSpeed;
+                result.BlockerIsStopLine = stopLine;
                 float stop = at - gap;
                 if (otherSpeed < StandingSpeed && OffWalk(ref stop, halfLength, v, a, reaction)) what += ", waiting before the crossing";
                 float allowed = Reach(otherSpeed, stop - reaction, a);
@@ -136,7 +151,9 @@ namespace Yesla.Driving
                 if (allowed < best) { best = allowed; why = cWhat + " in " + cAt.ToString("F0") + " m"; }
             }
 
-            return new Plan { Kmh = Mathf.Max(MinKmh, best * 3.6f), Why = why };
+            result.Kmh = Mathf.Max(MinKmh, best * 3.6f);
+            result.Why = why;
+            return result;
         }
 
         /// <summary>Fastest speed from which <paramref name="target"/> is still reached within <paramref name="distance"/>.</summary>
@@ -180,9 +197,10 @@ namespace Yesla.Driving
         /// person, a bin, or a red light's stop line. Swept with spheres at bumper height from sample to sample, so it
         /// follows bends, which the 3-12 m sensors and the 15 m wheel sweep of the road AI do not reach at speed.
         /// </summary>
-        private static bool Obstacle(LandVehicle car, DriveProfile p, float range, out float at, out float gap, out float otherSpeed, out string what)
+        private static bool Obstacle(LandVehicle car, DriveProfile p, float range, float shift, out float at, out float gap, out float otherSpeed, out string what,
+                                     out Collider blocker, out bool stopLine)
         {
-            at = float.MaxValue; gap = 0f; otherSpeed = 0f; what = string.Empty;
+            at = float.MaxValue; gap = 0f; otherSpeed = 0f; what = string.Empty; blocker = null; stopLine = false;
             VehicleAgent agent = car.Agent;
             int mask = agent != null && agent.sensor_FM != null ? (int)agent.sensor_FM.checkMask : Physics.DefaultRaycastLayers;
             Transform self = car.transform;
@@ -193,8 +211,8 @@ namespace Yesla.Driving
 
             for (int k = 0; k + 2 < Samples.Count && k * Step < range; k += 2)
             {
-                Vector3 from = Samples[k] + Join(off, k) + Vector3.up * ProbeHeight;
-                Vector3 to = Samples[k + 2] + Join(off, k + 2) + Vector3.up * ProbeHeight;
+                Vector3 from = Samples[k] + Join(off, k, Left(k) * shift) + Vector3.up * ProbeHeight;
+                Vector3 to = Samples[k + 2] + Join(off, k + 2, Left(k + 2) * shift) + Vector3.up * ProbeHeight;
                 Vector3 dir = to - from;
                 float len = dir.magnitude;
                 if (len < 0.01f) continue;
@@ -229,6 +247,8 @@ namespace Yesla.Driving
                     if (d >= at) continue;
                     at = d;
                     gap = hitGap;
+                    blocker = c;
+                    stopLine = obstacle != null;
                     Rigidbody rb = c.attachedRigidbody;
                     otherSpeed = rb != null && !rb.isKinematic ? Mathf.Max(0f, Vector3.Dot(rb.velocity, fwd)) : 0f;
                     what = (obstacle != null ? (obstacle.type == VehicleObstacle.EObstacleType.TrafficLight ? "red light" : "obstacle " + obstacle.name) : c.name);
@@ -280,8 +300,22 @@ namespace Yesla.Driving
             return false;
         }
 
-        /// <summary>The car's offset from the path, fading out over <see cref="JoinMetres"/>.</summary>
-        private static Vector3 Join(Vector3 off, int k) => off * Mathf.Max(0f, 1f - k * Step / JoinMetres);
+        /// <summary>The car's offset from the path, turning into <paramref name="settle"/> over <see cref="JoinMetres"/>.</summary>
+        private static Vector3 Join(Vector3 off, int k, Vector3 settle)
+        {
+            float t = Mathf.Min(1f, k * Step / JoinMetres);
+            return off * (1f - t) + settle * t;
+        }
+
+        /// <summary>The unit vector to the left of the path at sample <paramref name="k"/>.</summary>
+        internal static Vector3 Left(int k)
+        {
+            int a = Mathf.Clamp(k, 0, Samples.Count - 2);
+            Vector3 d = Samples[a + 1] - Samples[a]; d.y = 0f;
+            if (d.sqrMagnitude < 1e-6f) return Vector3.zero;
+            d.Normalize();
+            return new Vector3(-d.z, 0f, d.x);
+        }
 
         /// <summary>
         /// The nearest point of the path that another moving car is predicted to reach about when this one does,

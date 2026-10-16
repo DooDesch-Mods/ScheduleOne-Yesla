@@ -183,10 +183,10 @@ body {
   padding: 8px 8px 8px 12px; border-radius: 12px; background: #15161af5; box-shadow: 0 3px 12px #000000aa;
 }
 .app.full .destcard { left: 12px; right: auto; width: 420px; bottom: 12px; }
-.dt { flex: 1; min-width: 0; gap: 1px; }
-.dn { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt { flex: 1; min-width: 0; gap: 1px; height: 32px; justify-content: center; }
+.dn { height: 17px; font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dn.quiet { font-size: 12px; font-weight: 400; color: var(--muted); }
-.dl { flex-direction: row; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dl { flex-direction: row; gap: 4px; height: 14px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dl.live { color: var(--ok); }
 .pc { flex: none; white-space: nowrap; }
 .dl.warn { color: var(--warn); }
@@ -206,6 +206,7 @@ body {
 .btn:hover { background: var(--accent-hi); }
 .btn:active { background: var(--accent-lo); }
 .btn:disabled { background: #283456; color: #7f8aa8; }
+#send { width: 96px; }
 .btn.ghost { background: #2a2c31; color: #d6d8dc; font-weight: 400; }
 .btn.ghost:hover { background: #34363c; }
 .btn.ghost:disabled { background: #1b1c20; color: #55585e; }

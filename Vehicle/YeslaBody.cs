@@ -28,6 +28,14 @@ namespace Yesla.Vehicle
         private static readonly Color BrakeOn = new Color(1f, 0.03f, 0.02f);
         private static readonly Color ReverseOn = Color.white;
 
+        /// <summary>
+        /// Car paint: a metallic flake under a clear coat. The model's paint is a flat dielectric at 0.72 smoothness,
+        /// which reads as plastic; URP/Lit has no clear coat, so a little metal and a high smoothness stand in for it.
+        /// </summary>
+        internal static float PaintMetallic = 0.45f, PaintSmoothness = 0.9f;
+        /// <summary>The headlight beams start this far in front of the lamp's foremost point, in metres.</summary>
+        private const float BeamAhead = 0.02f;
+
         internal static bool Apply(GameObject car)
         {
             GlbModel model = GlbModel.LoadEmbedded();
@@ -117,8 +125,10 @@ namespace Yesla.Vehicle
             lodGroup.SetLODs(newLods);
             lodGroup.RecalculateBounds();
 
+            if (paint.Count > 0 && paint[0].sharedMaterial != null) Finish(paint[0].sharedMaterial);
             BindColour(lv, paint);
             BindLights(car, head, brake, reverse);
+            PlaceBeams(car, head);
             int wheels = FitWheels(lv, model, layout, layer);
             FitBounds(lv, layout, modelOffsetY);
             HideExhaust(lodGroup.transform);
@@ -126,6 +136,56 @@ namespace Yesla.Vehicle
             Core.Log.Msg("[Body] Yesla body on: " + hidden + " donor renderer(s) off, LODs " + lods[0].Count + "/" + lods[1].Count + "/" + lods[2].Count
                        + " part(s), " + paint.Count + " paint, lights " + head.Count + " head / " + brake.Count + " brake / " + reverse.Count + " reverse, " + wheels + " wheel(s).");
             return true;
+        }
+
+        /// <summary>Sets the paint finish; VehicleColor copies this material for every repaint, so the copies keep it.</summary>
+        internal static void Finish(Material paint)
+        {
+            paint.SetFloat("_Metallic", PaintMetallic);
+            paint.SetFloat("_Smoothness", PaintSmoothness);
+        }
+
+        /// <summary>
+        /// The donor's headlight sources carry the light and its volumetric beam, and sit where the Hounddog's lamps
+        /// are; on the Yesla the beam then starts in the air beside the lamp. Each source moves to the middle of the
+        /// Yesla head lamp on its side, at the lamp's front.
+        /// </summary>
+        private static void PlaceBeams(GameObject car, List<MeshRenderer> head)
+        {
+            VehicleLights lights = car.GetComponent<VehicleLights>();
+            if (lights == null || lights.headLightSources == null || lights.headLightSources.Length == 0) { Core.Log.Warning("[Body] the donor has no headlight sources - no beams to move."); return; }
+            Transform t = car.transform;
+            bool[] found = new bool[2];
+            Bounds[] side = new Bounds[2];
+            // Mesh bounds, not renderer bounds: the prefab is inactive, and an inactive renderer has no world bounds.
+            foreach (MeshRenderer r in head)
+            {
+                MeshFilter mf = r != null ? r.GetComponent<MeshFilter>() : null;
+                if (mf == null || mf.sharedMesh == null) continue;
+                Bounds b = mf.sharedMesh.bounds;
+                int s = t.InverseTransformPoint(r.transform.TransformPoint(b.center)).x < 0f ? 0 : 1;
+                for (int k = 0; k < 8; k++)
+                {
+                    Vector3 corner = new Vector3((k & 1) == 0 ? b.min.x : b.max.x, (k & 2) == 0 ? b.min.y : b.max.y, (k & 4) == 0 ? b.min.z : b.max.z);
+                    Vector3 local = t.InverseTransformPoint(r.transform.TransformPoint(corner));
+                    if (!found[s]) { side[s] = new Bounds(local, Vector3.zero); found[s] = true; }
+                    else side[s].Encapsulate(local);
+                }
+            }
+            if (!found[0] || !found[1]) { Core.Log.Warning("[Body] the head lamps are not on both sides of the car - the beams stay where the donor had them."); return; }
+            int moved = 0;
+            foreach (var source in lights.headLightSources)
+            {
+                if (source == null) continue;
+                Transform st = source.transform;
+                Vector3 was = t.InverseTransformPoint(st.position);
+                Bounds lamp = side[was.x < 0f ? 0 : 1];
+                Vector3 at = new Vector3(lamp.center.x, lamp.center.y, lamp.max.z + BeamAhead);
+                st.position = t.TransformPoint(at);
+                Core.Log.Msg("[Body] headlight beam " + st.name + " moved from " + was.ToString("F2") + " to " + at.ToString("F2") + " (car space).");
+                moved++;
+            }
+            if (moved == 0) Core.Log.Warning("[Body] every headlight source is empty - no beams moved.");
         }
 
         private static MeshRenderer AddPart(Transform parent, GlbModel.Part part, int layer)
