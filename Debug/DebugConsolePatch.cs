@@ -376,7 +376,9 @@ namespace Yesla.Debugging
 
                     case "enter":
                     {
-                        LandVehicle car = NearestOwnedCar(10f);
+                        // The own Yesla first; a save often owns other cars parked closer.
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null || Vector3.Distance(car.transform.position, Player.Local.transform.position) > 10f) car = NearestOwnedCar(10f);
                         if (car == null) { Say("no player-owned car within 10 m"); break; }
                         car.EnterVehicle();
                         Say("entering " + car.VehicleName);
