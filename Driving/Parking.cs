@@ -67,6 +67,8 @@ namespace Yesla.Driving
         /// <summary>Backing out for a new try ends this far before the spot.</summary>
         private const float BackTo = 5f;
         private const float BlockedGiveUp = 6f;
+        /// <summary>Waiting adds up over one spot; a car that keeps rolling clear and back never waits 6 s in one go.</summary>
+        private const float WaitedGiveUp = 15f;
         private const int MaxTurns = 6;
         private const int SameHitsGiveUp = 2;
         private const int MaxSpots = 3;            // spots given up on before the manoeuvre stops trying
@@ -176,8 +178,9 @@ namespace Yesla.Driving
             if (candidates.Count == 0) { why = "no parking lot within " + radius.ToString("F0") + " m"; return null; }
             candidates.Sort((a, b) => a.d.CompareTo(b.d));
 
-            // Planning fills the shared stage and reverse paths, so it is only tried while no manoeuvre runs.
-            if (reachable && _car != null)
+            // Planning fills the shared stage and reverse paths. Another car's manoeuvre would lose them; the car's own
+            // manoeuvre is giving its spot up and plans the next one from scratch.
+            if (reachable && _car != null && _car.Pointer != car.Pointer)
             {
                 Core.Log.Warning("[Park] the manoeuvre is busy with " + _car.VehicleName + " - choosing a spot without checking the way in.");
                 reachable = false;
@@ -520,7 +523,7 @@ namespace Yesla.Driving
         private static readonly HashSet<IntPtr> Skip = new HashSet<IntPtr>();
         private static bool _turning;
         private static Vector3 _backFrom;
-        private static float _phaseTime, _blockedFor, _stillFor, _stuckFor, _steer;
+        private static float _phaseTime, _blockedFor, _waited, _stillFor, _stuckFor, _steer;
         /// <summary>Whether this manoeuvre already reported waking an empty kinematic car.</summary>
         private static bool _wokeUp;
         /// <summary>How long the run to the stop point may take: its length at approach speed, half again, plus slack.</summary>
@@ -601,6 +604,7 @@ namespace Yesla.Driving
             car.OverrideMaxSteerAngle(ParkLock);
             _tries = 0;
             _turns = 0;
+            _waited = 0f;
             _stageBackOffs = 0;
             _stageBacking = false;
             _sameHits = 0;
@@ -1304,7 +1308,7 @@ namespace Yesla.Driving
                 Finish(false, Key(what) + " keeps the car out, and " + MaxSpots + " spots were tried");
                 return;
             }
-            ParkTarget next = Find(car, old.Centre, out string none);
+            ParkTarget next = Find(car, old.Centre, out string none, reachable: true);
             if (next == null)
             {
                 Finish(false, Key(what) + " keeps the car out, no other spot (" + none + ")");
@@ -1369,7 +1373,16 @@ namespace Yesla.Driving
             if (_blockedFor == 0f || key != _blockedBy) Core.Log.Msg("[Park] waiting: " + what + " in the way.");
             _blockedBy = key;
             _blockedFor += dt;
-            car.throttleOverride = Mathf.Abs(v) > 0.5f ? -Mathf.Sign(v) * 0.8f : 0f;
+            _waited += dt;
+            // Braking on the body, not with throttle against the motion: a reverse throttle rolled the car back clear
+            // of the post, the way looked free, it drove up again, and the wait never added up.
+            car.throttleOverride = 0f;
+            Brake(car, dt);
+            if (_waited > WaitedGiveUp && _blockedFor <= BlockedGiveUp)
+            {
+                Core.Log.Warning("[Park] waited " + _waited.ToString("F0") + " s for " + key + " at " + _target?.Label + " - giving up.");
+                _blockedFor = BlockedGiveUp + 1f;
+            }
         }
 
         /// <summary>Throttle towards a signed speed. Below 4 km/h vanilla drives a negative throttle backwards, above
