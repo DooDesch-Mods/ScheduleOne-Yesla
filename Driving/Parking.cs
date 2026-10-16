@@ -124,6 +124,17 @@ namespace Yesla.Driving
         /// pulling out for a second try.
         /// </summary>
         private const float StageDriveOn = 3.5f;
+        /// <summary>
+        /// No single backing arc reaches the spot from where the car stands: it plans short moves - forward or back,
+        /// straight or at full lock, these lengths - after which one arc does, fewest changes of direction first; two
+        /// moves at most, three when two find nothing.
+        /// A driver shunts the same way instead of backing in crooked and pulling all the way out again.
+        /// </summary>
+        private static readonly float[] ShuffleLengths = { 0.75f, 1.5f, 2.5f, 3.5f, 5f };
+        private const int MaxShuffles = 3;
+        /// <summary>The arc into the spot is checked for obstacles until the car is this close to the spot's centre;
+        /// from there on it is between the spot's neighbours, which <see cref="Free"/> covers.</summary>
+        private const float ShuffleMouth = 4.5f;
         /// <summary>Handed over from the road, the car stands at least this far before the stop point, driving towards it.</summary>
         private const float StageBefore = 2f;
         /// <summary>Backing in from where the car stands: at most this far straight back before the arc, and no wider arc.</summary>
@@ -143,7 +154,7 @@ namespace Yesla.Driving
         /// <summary>The host frees a spot once its car is this far from it.</summary>
         private const float LeaveDistance = 5f;
 
-        private enum Phase { Stage, Approach, Back, Settle }
+        private enum Phase { Stage, Shuffle, Approach, Back, Settle }
 
         private static readonly List<ParkingLot> Lots = new List<ParkingLot>();
         private static bool _lotsFound;
@@ -558,6 +569,58 @@ namespace Yesla.Driving
         private static float _nudge;
         private static bool _stageBacking;
         private static bool _drivingOn;
+
+        private struct Move
+        {
+            internal float Dir, Steer, Len, Turn;
+            public override string ToString() => (Dir > 0f ? "forward " : "back ") + Len.ToString("F2") + " m"
+                + (Steer == 0f ? " straight" : Steer > 0f ? " wheels right" : " wheels left");
+        }
+        private static readonly List<Move> Moves = new List<Move>();
+        private static readonly List<Move> Primitives = new List<Move>();
+        private static readonly List<Vector3> ArcProbe = new List<Vector3>();
+
+        /// <summary>
+        /// The radius the rear axle really turns on at full lock while parking. 45 degrees at the wheels and a 2.9 m
+        /// wheelbase make 2.9 m on paper, but the tyres slip and the car turns on about 5 m; arcs planned tighter than
+        /// that end turned the wrong amount and the car backs in crooked. Measured on every full-lock stretch and kept
+        /// for the session.
+        /// </summary>
+        private static float _lockRadius = 5f;
+        private static float _lockDist, _lockYaw;
+        private static Vector3 _lockFwd;
+        private static bool _lockFwdValid;
+        /// <summary>Planned arcs are this much wider than the measured full-lock circle: the wheels take a moment to turn.</summary>
+        private const float LockSlack = 1.08f;
+        private static float LockRadius() => _lockRadius * LockSlack;
+
+        /// <summary>Adds this frame to the measurement when the wheels stand at full lock and the car rolls.</summary>
+        private static void MeasureLock(LandVehicle car, Vector3 fwd, float v, float dt)
+        {
+            bool full = Mathf.Abs(car.steerOverride) > 0.97f && Mathf.Abs(v) > 1.5f;
+            if (full && _lockFwdValid)
+            {
+                _lockDist += Mathf.Abs(v) / 3.6f * dt;
+                _lockYaw += Vector3.Angle(_lockFwd, fwd) * Mathf.Deg2Rad;
+                if (_lockYaw > 0.5f)
+                {
+                    // The car's centre runs on a wider circle than its rear axle by half the wheelbase across.
+                    float centre = _lockDist / _lockYaw;
+                    float rear = Mathf.Sqrt(Mathf.Max(1f, centre * centre - Wheelbase * Wheelbase * 0.25f));
+                    float was = _lockRadius;
+                    _lockRadius = Mathf.Clamp(Mathf.Lerp(_lockRadius, rear, 0.5f), 3f, 8f);
+                    Core.Log.Msg("[Park] full-lock circle measured " + rear.ToString("F2") + " m at the rear axle over " + _lockDist.ToString("F1") + " m; planning with "
+                                 + _lockRadius.ToString("F2") + " m (was " + was.ToString("F2") + ").");
+                    _lockDist = 0f;
+                    _lockYaw = 0f;
+                }
+            }
+            else if (!full) { _lockDist = 0f; _lockYaw = 0f; }
+            _lockFwd = fwd;
+            _lockFwdValid = true;
+        }
+        private static int _move, _shuffles;
+        private static Vector3 _moveFrom, _moveFwd;
         private static Vector3 _driveOnFrom;
         private static readonly List<Vector3> Probe = new List<Vector3>();
         private static int _stageBackOffs;
@@ -637,6 +700,10 @@ namespace Yesla.Driving
             _stageBackOffs = 0;
             _stageBacking = false;
             _drivingOn = false;
+            _shuffles = 0;
+            _lockFwdValid = false;
+            _lockDist = 0f;
+            _lockYaw = 0f;
             _sameHits = 0;
             _lastHit = string.Empty;
             _steer = 0f;
@@ -725,7 +792,7 @@ namespace Yesla.Driving
             u.Normalize();
             float y = t.Centre.y;
             float theta = Vector3.SignedAngle(u, n, Vector3.up);
-            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            float rMin = LockRadius();
             float half = Wheelbase * 0.5f;
             float s = Mathf.Sign(theta);
             float bend = 1f - Mathf.Cos(theta * Mathf.Deg2Rad);
@@ -798,7 +865,7 @@ namespace Yesla.Driving
             Vector3 side = Vector3.Cross(Vector3.up, n);
             float y = t.Centre.y;
             float half = Wheelbase * 0.5f;
-            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            float rMin = LockRadius();
             Vector3 from = t.Lot != null && t.Lot.EntryPoint != null ? t.Lot.EntryPoint.position : pos;
             float across = Vector3.Dot(Flat(t.Centre - from), side);
             Vector3 facingNow = Flat(car.transform.forward).normalized;
@@ -890,7 +957,7 @@ namespace Yesla.Driving
             Vector3 h = target.Heading;
             Vector3 side = Vector3.Cross(Vector3.up, h);
             float y = target.Centre.y;
-            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            float rMin = LockRadius();
             float eh = StraightIn - Wheelbase * 0.5f;
             Vector3 end = target.Centre + h * eh;
             bool sideFirst = Vector3.Dot(Flat(target.Centre - pos), side) >= 0f;
@@ -902,6 +969,7 @@ namespace Yesla.Driving
                 {
                     int ri = k / PassLines.Length;
                     float r = ri < SwingRadii.Length ? SwingRadii[ri] : rMin;
+                    if (ri < SwingRadii.Length && r < rMin) continue;
                     float line = PassLines[k % PassLines.Length];
                     float cos = Mathf.Min(1f, (line + r - eh) / (2f * r));
                     float psi = Mathf.Acos(cos), sin = Mathf.Sin(psi);
@@ -993,6 +1061,8 @@ namespace Yesla.Driving
             Path.Clear();
             if (!ArcFrom(_target, pos, _car.transform.forward, out string how))
             {
+                if (TryShuffle(pos, 1f, why, how)) return;
+                Path.Clear();
                 Path.AddRange(ReversePath);
                 how = how + ", following the arc planned from the stop point";
             }
@@ -1016,7 +1086,7 @@ namespace Yesla.Driving
             u.Normalize();
             float theta = Vector3.SignedAngle(u, h, Vector3.up);
             if (Mathf.Abs(theta) < 10f) { how = "already facing out of the spot"; return false; }
-            float rMin = Wheelbase / Mathf.Tan(ParkLock * Mathf.Deg2Rad) * ArcSlack;
+            float rMin = LockRadius();
             float bend = 1f - Mathf.Cos(theta * Mathf.Deg2Rad);
             float y = t.Centre.y;
             string first = null;
@@ -1048,6 +1118,174 @@ namespace Yesla.Driving
             }
             how = first ?? "no straight-back distance gives a fitting arc";
             return false;
+        }
+
+        /// <summary>
+        /// Plans and starts the short moves after which one backing arc reaches the spot. <paramref name="lastDir"/> is
+        /// the way the car was going, so carrying on that way costs no change of direction. False when none is found
+        /// or the spot has had <see cref="MaxShuffles"/> plans already; the caller falls back to its old way.
+        /// </summary>
+        private static bool TryShuffle(Vector3 pos, float lastDir, string why, string tight)
+        {
+            if (_shuffles >= MaxShuffles) { Core.Log.Msg("[Park] " + _target.Label + ": " + MaxShuffles + " plans of short moves already, no more."); return false; }
+            LandVehicle car = _car;
+            Vector3 fwd = Flat(car.transform.forward).normalized;
+            bool ahead = Blocked(car, fwd, CreepKmh, out string front, out _, out _);
+            bool behind = Blocked(car, -fwd, CreepKmh, out string back, out _, out _);
+            float planStart = Time.realtimeSinceStartup;
+            bool planned = PlanShuffle(car, _target, Flat3(pos, _target.Centre.y), fwd, lastDir, !ahead, !behind, out string plan);
+            plan += " [planned in " + ((Time.realtimeSinceStartup - planStart) * 1000f).ToString("F0") + " ms]";
+            if (!planned)
+            {
+                Core.Log.Msg("[Park] " + _target.Label + ": " + tight + ", and no two short moves lead to one arc (" + plan + ")"
+                             + (ahead ? ", " + front + " ahead" : "") + (behind ? ", " + back + " behind" : "") + ".");
+                return false;
+            }
+            _shuffles++;
+            _move = 0;
+            _moveFrom = pos;
+            _moveFwd = fwd;
+            SetPhase(Phase.Shuffle, why + ", " + Pose() + "; " + tight + ", so " + plan + " first");
+            return true;
+        }
+
+
+        /// <summary>The cheapest one or two moves after which <see cref="ArcClear"/> holds, into <see cref="Moves"/>.</summary>
+        private static bool PlanShuffle(LandVehicle car, ParkTarget t, Vector3 pos, Vector3 fwd, float lastDir, bool canForward, bool canBack, out string how)
+        {
+            Primitives.Clear();
+            {
+                float r = _lockRadius;
+                foreach (float dir in new[] { 1f, -1f })
+                    foreach (float steer in new[] { 0f, 1f, -1f })
+                        foreach (float len in ShuffleLengths)
+                            Primitives.Add(new Move { Dir = dir, Steer = steer, Len = len, Turn = steer == 0f ? 0f : len / r * Mathf.Rad2Deg });
+            }
+            Moves.Clear();
+            float y = t.Centre.y;
+            float bestCost = float.MaxValue;
+            Move b1 = default, b2 = default, b3 = default;
+            int n = 0;
+            string first = null;
+            foreach (Move m1 in Primitives)
+            {
+                if (m1.Dir > 0f ? !canForward : !canBack) continue;
+                Vector3 p1 = pos, f1 = fwd;
+                if (!Simulate(car, ref p1, ref f1, m1, y, true, out string what)) { first ??= m1 + " meets " + what; continue; }
+                float c1 = ShuffleCost(lastDir, m1.Dir, 0f, m1.Len);
+                if (c1 < bestCost && ArcClear(car, t, p1, f1, out _)) { bestCost = c1; b1 = m1; n = 1; }
+                foreach (Move m2 in Primitives)
+                {
+                    float c2 = ShuffleCost(lastDir, m1.Dir, m2.Dir, m1.Len + m2.Len);
+                    if (c2 >= bestCost) continue;
+                    Vector3 p2 = p1, f2 = f1;
+                    Simulate(car, ref p2, ref f2, m2, y, false, out _);
+                    if (!ArcFits(t, p2, f2, out _)) continue;
+                    p2 = p1; f2 = f1;
+                    if (!Simulate(car, ref p2, ref f2, m2, y, true, out _) || !ArcClear(car, t, p2, f2, out _)) continue;
+                    bestCost = c2; b1 = m1; b2 = m2; n = 2;
+                }
+            }
+            if (n == 0)
+            {
+                // A third move: only now, since it costs a few thousand outline checks.
+                foreach (Move m1 in Primitives)
+                {
+                    if (m1.Dir > 0f ? !canForward : !canBack) continue;
+                    Vector3 p1 = pos, f1 = fwd;
+                    if (!Simulate(car, ref p1, ref f1, m1, y, true, out _)) continue;
+                    foreach (Move m2 in Primitives)
+                    {
+                        if (m2.Dir == m1.Dir) continue;
+                        if (ShuffleCost(lastDir, m1.Dir, m2.Dir, m1.Len + m2.Len) >= bestCost) continue;
+                        Vector3 p2 = p1, f2 = f1;
+                        if (!Simulate(car, ref p2, ref f2, m2, y, true, out _)) continue;
+                        foreach (Move m3 in Primitives)
+                        {
+                            if (m3.Dir == m2.Dir) continue;
+                            float c3 = ShuffleCost3(lastDir, m1.Dir, m2.Dir, m3.Dir, m1.Len + m2.Len + m3.Len);
+                            if (c3 >= bestCost) continue;
+                            Vector3 p3 = p2, f3 = f2;
+                            Simulate(car, ref p3, ref f3, m3, y, false, out _);
+                            if (!ArcFits(t, p3, f3, out _)) continue;
+                            p3 = p2; f3 = f2;
+                            if (!Simulate(car, ref p3, ref f3, m3, y, true, out _) || !ArcClear(car, t, p3, f3, out _)) continue;
+                            bestCost = c3; b1 = m1; b2 = m2; b3 = m3; n = 3;
+                        }
+                    }
+                }
+            }
+            if (n == 0) { how = first ?? "no arc from any end pose"; return false; }
+            Moves.Add(b1);
+            if (n >= 2) Moves.Add(b2);
+            if (n == 3) Moves.Add(b3);
+            how = string.Join(", then ", Moves) + " (" + Mathf.FloorToInt(bestCost / 10f) + " changes of direction before the arc in)";
+            return true;
+        }
+
+        /// <summary>Changes of direction weigh far more than metres; the arc into the spot is always backwards.</summary>
+        private static float ShuffleCost(float lastDir, float d1, float d2, float metres) => ShuffleCost3(lastDir, d1, d2, 0f, metres);
+
+        private static float ShuffleCost3(float lastDir, float d1, float d2, float d3, float metres)
+        {
+            int changes = 0;
+            float at = lastDir;
+            foreach (float d in new[] { d1, d2, d3, -1f })
+            {
+                if (d == 0f) continue;
+                if (at != 0f && d != at) changes++;
+                at = d;
+            }
+            return changes * 10f + metres;
+        }
+
+        /// <summary>
+        /// Drives <paramref name="m"/> on paper from the car's pose, turning about the rear axle; with
+        /// <paramref name="collide"/> the car's outline is checked every half metre.
+        /// </summary>
+        private static bool Simulate(LandVehicle car, ref Vector3 pos, ref Vector3 fwd, Move m, float y, bool collide, out string what)
+        {
+            what = string.Empty;
+            float r = _lockRadius;
+            Vector3 rear = pos - fwd * (Wheelbase * 0.5f);
+            int steps = Mathf.CeilToInt(m.Len / 0.25f);
+            float step = m.Len / steps;
+            for (int i = 1; i <= steps; i++)
+            {
+                float turn = m.Dir * m.Steer * step / r * Mathf.Rad2Deg;
+                Vector3 mid = Quaternion.AngleAxis(turn * 0.5f, Vector3.up) * fwd;
+                rear += mid * (m.Dir * step);
+                fwd = (Quaternion.AngleAxis(turn, Vector3.up) * fwd).normalized;
+                if (collide && (i % 2 == 0 || i == steps) && !Outline(car, Flat3(rear + fwd * (Wheelbase * 0.5f), y), fwd, out what)) return false;
+            }
+            pos = Flat3(rear + fwd * (Wheelbase * 0.5f), y);
+            return true;
+        }
+
+        /// <summary>One arc from this pose (<see cref="ArcFrom"/>) whose line is clear of obstacles up to the spot's mouth.</summary>
+        private static bool ArcClear(LandVehicle car, ParkTarget t, Vector3 pos, Vector3 forward, out string how)
+        {
+            Probe.Clear();
+            Probe.AddRange(Path);
+            int seg = _seg;
+            Path.Clear();
+            bool ok = ArcFrom(t, pos, forward, out how);
+            ArcProbe.Clear();
+            ArcProbe.AddRange(Path);
+            Path.Clear();
+            Path.AddRange(Probe);
+            _seg = seg;
+            if (!ok) return false;
+            for (int i = 0; i + 1 < ArcProbe.Count; i++)
+            {
+                Vector3 p = ArcProbe[i];
+                if (Vector3.Dot(Flat(p - t.Centre), t.Heading) < ShuffleMouth) break;
+                // Backing: the car faces away from the way it moves.
+                Vector3 facing = Flat(p - ArcProbe[i + 1]);
+                if (facing.sqrMagnitude < 1e-4f) continue;
+                if (!Outline(car, p, facing, out string what)) { how = "the arc in meets " + what; return false; }
+            }
+            return true;
         }
 
         /// <summary>Whether <see cref="ArcFrom"/> finds one arc from this pose, leaving the path the car follows as it is.</summary>
@@ -1139,6 +1377,7 @@ namespace Yesla.Driving
             float along = Vector3.Dot(Flat(_target.Centre - pos), into);
             float lat = Vector3.Dot(Flat(pos - _target.Centre), Vector3.Cross(Vector3.up, into));
             float heading = Vector3.SignedAngle(_target.Heading, fwd, Vector3.up);
+            MeasureLock(car, fwd, v, dt);
 
             switch (_phase)
             {
@@ -1237,6 +1476,34 @@ namespace Yesla.Driving
                     Steer(car, Pursuit(pos, fwd, 1f), dt);
                     break;
                 }
+                case Phase.Shuffle:
+                {
+                    Move m = Moves[_move];
+                    float gone = Flat(pos - _moveFrom).magnitude;
+                    float turnedBy = Vector3.Angle(_moveFwd, fwd);
+                    // A turning move ends on its heading: the car turns a little tighter than planned, and the arc
+                    // after it is planned again from wherever the car then stands.
+                    bool reached = m.Steer == 0f ? gone >= m.Len : turnedBy >= m.Turn || gone >= m.Len * 1.5f;
+                    bool stopped = Blocked(car, fwd * m.Dir, Mathf.Max(0f, v * m.Dir), out string stopper, out bool stopperMoving, out _);
+                    if (stopped && stopperMoving && !reached)
+                    {
+                        Hold(car, v, dt, stopper);
+                        if (_blockedFor > BlockedGiveUp) Finish(false, "blocked by " + stopper);
+                        break;
+                    }
+                    if (reached || stopped || _phaseTime > 4f + m.Len / (CreepKmh / 3.6f) * 2f)
+                    {
+                        Core.Log.Msg("[Park] Shuffle: move " + (_move + 1) + " of " + Moves.Count + " (" + m + ") "
+                                     + (reached ? "done" : stopped ? "stopped by " + stopper : "took too long") + " after " + gone.ToString("F1") + " m, " + turnedBy.ToString("F0") + " deg.");
+                        if (++_move < Moves.Count) { _moveFrom = pos; _moveFwd = fwd; _phaseTime = 0f; break; }
+                        StartIn(pos, "after " + Moves.Count + " short move" + (Moves.Count > 1 ? "s" : ""));
+                        break;
+                    }
+                    _blockedFor = 0f;
+                    Drive(car, v, m.Dir * CreepKmh, dt);
+                    Steer(car, m.Steer * ParkLock, dt);
+                    break;
+                }
                 case Phase.Approach:
                 {
                     bool onAxis = _seg >= Path.Count - 2;
@@ -1313,6 +1580,8 @@ namespace Yesla.Driving
                     {
                         Path.Clear();
                         string how = "";
+                        if (_target.Reverse && !ArcFrom(_target, pos, fwd, out how) && TryShuffle(pos, -_dir, (far ? "backed out" : "stopped backing"), how)) break;
+                        Path.Clear();
                         if (!_target.Reverse || !ArcFrom(_target, pos, fwd, out how))
                         {
                             if (_target.Reverse) how = "; " + how + ", lining up on the axis";
