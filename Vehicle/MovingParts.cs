@@ -54,7 +54,7 @@ namespace Yesla.Vehicle
         {
             internal LandVehicle V;
             internal VehicleLights L;
-            internal bool LoggedTail;
+            internal bool LoggedTail, LoggedReverse;
             internal Transform Steering, WiperL, WiperR, Bonnet, Boot;
             // Turning direction per part, worked out from its shape: a lid and a wiper turn the way that lifts them,
             // the steering wheel the way that moves its top to the right for a right turn.
@@ -136,6 +136,7 @@ namespace Yesla.Vehicle
                 if (c == null) continue;
                 MoveLids(c, dt);
                 Tail(c);
+                ReverseLight(c);
                 if (cam != null && (v.transform.position - eye).sqrMagnitude > PoseRange * PoseRange) continue;
                 Steer(c);
                 Wipe(c, now, dt);
@@ -312,6 +313,17 @@ namespace Yesla.Vehicle
                     meshes[i].sharedMaterial = want;
         }
 
+        /// <summary>Vanilla switches the reverse light; this only logs when it does, so the log shows it ran.</summary>
+        private static void ReverseLight(Car c)
+        {
+            var sources = c.L != null ? c.L.reverseLightSources : null;
+            if (sources == null || sources.Length == 0 || sources[0] == null) return;
+            bool on = sources[0].enabled;
+            if (on == c.LoggedReverse) return;
+            c.LoggedReverse = on;
+            Core.Log.Msg("[Parts] " + c.V.VehicleName + " #" + Fleet.NetId(c.V) + " reverse light " + (on ? "on" : "off") + ".");
+        }
+
         private static float Ease(float t) => t * t * (3f - 2f * t);
 
         private static void Pose(Transform pivot, string part, float degrees)
@@ -334,7 +346,8 @@ namespace Yesla.Vehicle
               .Append(" | wipers ").Append(c.Wiping ? "on" : "off").Append(" L ").Append(Rot(c.WiperL)).Append(" R ").Append(Rot(c.WiperR))
               .Append(" | bonnet ").Append(c.BonnetT.ToString("F2")).Append(' ').Append(Rot(c.Bonnet))
               .Append(" boot ").Append(c.BootT.ToString("F2")).Append(' ').Append(Rot(c.Boot))
-              .Append(" | tail ").Append(c.LoggedTail ? "on" : "off");
+              .Append(" | tail ").Append(c.LoggedTail ? "on" : "off")
+              .Append(" | reverse light ").Append(c.LoggedReverse ? "on" : "off");
             return sb.ToString();
         }
 

@@ -280,7 +280,54 @@ namespace Yesla.Vehicle
                 // The reverse lamp's texture is mostly dark, and the smoked cover sits over it: lit through the
                 // texture it barely shows. It glows flat white instead.
                 lights.reverseLightMat_On = GlbModel.Emissive(reverseOff, ReverseOn, "Yesla_Light_Reverse_On", useMap: false);
+                AddReverseLight(car, lights, reverse);
             }
+        }
+
+        // The reverse lamps light the ground behind the car: a wide spot from the middle of the lamps, tipped down.
+        internal static float ReverseLightIntensity = 4f, ReverseLightRange = 9f, ReverseLightAngle = 120f, ReverseLightTilt = 30f;
+
+        /// <summary>
+        /// A spot light behind the car, in <c>reverseLightSources</c>: vanilla VehicleLights switches it with the reverse
+        /// lamps, on every peer, from the car's own reversing state. The lamp meshes alone glow, but light nothing.
+        /// </summary>
+        private static void AddReverseLight(GameObject car, VehicleLights lights, List<MeshRenderer> reverse)
+        {
+            Transform t = car.transform;
+            bool found = false;
+            Bounds b = default;
+            // Vertices, not renderer bounds: the prefab is inactive, and an inactive renderer has no world bounds.
+            foreach (MeshRenderer r in reverse)
+            {
+                MeshFilter mf = r != null ? r.GetComponent<MeshFilter>() : null;
+                if (mf == null || mf.sharedMesh == null) continue;
+                Matrix4x4 toCar = t.worldToLocalMatrix * r.transform.localToWorldMatrix;
+                foreach (Vector3 v in mf.sharedMesh.vertices)
+                {
+                    Vector3 local = toCar.MultiplyPoint3x4(v);
+                    if (!found) { b = new Bounds(local, Vector3.zero); found = true; }
+                    else b.Encapsulate(local);
+                }
+            }
+            if (!found) { Core.Log.Warning("[Body] the reverse lamps have no mesh vertices - no reverse light on the ground."); return; }
+
+            var go = new GameObject("YeslaReverseLight");
+            go.transform.SetParent(t, false);
+            go.transform.localPosition = new Vector3(0f, b.center.y, b.min.z - 0.05f);
+            go.transform.localRotation = Quaternion.Euler(ReverseLightTilt, 180f, 0f);
+            Light light = go.AddComponent<Light>();
+            light.type = LightType.Spot;
+            light.color = Color.white;
+            light.intensity = ReverseLightIntensity;
+            light.range = ReverseLightRange;
+            light.spotAngle = ReverseLightAngle;
+            light.shadows = LightShadows.None;
+            light.enabled = false;
+
+            var sources = new Il2CppReferenceArray<Light>(1);
+            sources[0] = light;
+            lights.reverseLightSources = sources;
+            Core.Log.Msg("[Body] reverse light at " + go.transform.localPosition.ToString("F2") + " (car space), " + ReverseLightIntensity + " intensity, " + ReverseLightRange + " m.");
         }
 
         /// <summary>
