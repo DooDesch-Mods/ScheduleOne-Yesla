@@ -70,6 +70,7 @@ namespace Yesla.Debugging
                         Say("engage / stop      - start or stop assisted driving (same as the key)");
                         Say("steer <x>          - set the steering axis like a key press (0 releases it)");
                         Say("throttle <y>       - set the throttle axis the same way (-1 reverses, 0 releases it)");
+                        Say("revlight on|off [i range angle tilt] - switch and tune the reverse ground light while standing");
                         Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
                         Say("fp eye <x> <y> <z> - eye position in the seat's local space");
                         Say("viz [hud|full|off|lights] - driving visualisation view (same as the visualisation key); lights lists nearby traffic lights");
@@ -392,6 +393,24 @@ namespace Yesla.Debugging
                         if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out y);
                         GameInput.MotionAxis = new Vector2(GameInput.MotionAxis.x, y);
                         Say("throttle axis set to " + y.ToString("F2", CultureInfo.InvariantCulture) + ". " + Autopilot.Describe());
+                        break;
+                    }
+
+                    case "revlight":
+                    {
+                        // revlight on|off [intensity range angle tilt] - switches the own Yesla's reverse light while it
+                        // stands, to look at it; vanilla switches it back on the next reverse change
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        var vl = car != null ? car.GetComponent<VehicleLights>() : null;
+                        if (vl == null || vl.reverseLightSources == null || vl.reverseLightSources.Length == 0 || vl.reverseLightSources[0] == null) { Say("revlight: no own Yesla with a reverse light"); break; }
+                        Light light = vl.reverseLightSources[0];
+                        light.enabled = parts.Length < 3 || parts[2] != "off";
+                        float F(int i, float d) => parts.Length > i && float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out float v) ? v : d;
+                        light.intensity = F(3, light.intensity);
+                        light.range = F(4, light.range);
+                        light.spotAngle = F(5, light.spotAngle);
+                        light.transform.localRotation = Quaternion.Euler(F(6, light.transform.localEulerAngles.x), 180f, 0f);
+                        Say("revlight: " + (light.enabled ? "on" : "off") + ", intensity " + light.intensity + ", range " + light.range + ", angle " + light.spotAngle + ", tilt " + light.transform.localEulerAngles.x.ToString("F0") + ", at " + car.transform.InverseTransformPoint(light.transform.position).ToString("F2"));
                         break;
                     }
 
