@@ -62,7 +62,7 @@ namespace Yesla.Vehicle
             internal readonly List<Caliper> Calipers = new List<Caliper>();
             internal float BonnetT, BootT;
             internal float WipePhase;
-            internal bool Wiping, Raining;
+            internal bool Wiping;
             internal float Rain;
             internal float NextRain;
             internal bool LoggedBonnet, LoggedBoot;
