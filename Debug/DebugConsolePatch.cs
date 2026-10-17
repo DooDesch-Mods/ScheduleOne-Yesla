@@ -69,6 +69,7 @@ namespace Yesla.Debugging
                         Say("go <x> <y> <z>     - destination = a world position");
                         Say("engage / stop      - start or stop assisted driving (same as the key)");
                         Say("steer <x>          - set the steering axis like a key press (0 releases it)");
+                        Say("throttle <y>       - set the throttle axis the same way (-1 reverses, 0 releases it)");
                         Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
                         Say("fp eye <x> <y> <z> - eye position in the seat's local space");
                         Say("viz [hud|full|off|lights] - driving visualisation view (same as the visualisation key); lights lists nearby traffic lights");
@@ -92,7 +93,7 @@ namespace Yesla.Debugging
                         Say("sharp [post on|off | aa none|fxaa|smaa | bias <n>] - why the phone looks soft");
                         Say("glass [cast|receive on|off] - the window materials and their shadows");
                         Say("goto [x y z]       - Go to target: the empty car drives to the destination and parks");
-                        Say("overhead [h|off]   - a camera straight above the car, for parking screenshots");
+                        Say("overhead [h|front|rear|off] - a camera above the car, beside its nose or behind its tail");
                         Say("claim [code]       - host: give the nearest Yesla to a player code (default: me)");
                         Say("profile [chill|standard|madmax] - show or set the drive profile (same as the phone)");
                         Say("zones              - every speed zone with its speed and size");
@@ -384,6 +385,16 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "throttle":
+                    {
+                        // Writes the throttle axis like 'steer' writes the steering axis; negative reverses.
+                        float y = 0f;
+                        if (parts.Length > 2) float.TryParse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture, out y);
+                        GameInput.MotionAxis = new Vector2(GameInput.MotionAxis.x, y);
+                        Say("throttle axis set to " + y.ToString("F2", CultureInfo.InvariantCulture) + ". " + Autopilot.Describe());
+                        break;
+                    }
+
                     case "tp":
                     {
                         // Moves the local player; the vanilla 'teleport' command only runs on the host.
@@ -505,7 +516,7 @@ namespace Yesla.Debugging
                         if (_overhead != null) { UnityEngine.Object.Destroy(_overhead); _overhead = null; }
                         if (arg == "off") { Say("overhead: off"); break; }
                         float height = 14f;
-                        if (arg.Length > 0 && arg != "front") float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out height);
+                        if (arg.Length > 0 && arg != "front" && arg != "rear") float.TryParse(arg, NumberStyles.Float, CultureInfo.InvariantCulture, out height);
                         LandVehicle car = Phone.YeslaApp.MyCar();
                         if (car == null) { Say("overhead: no own Yesla"); break; }
                         _overhead = new GameObject("Yesla_OverheadCam");
@@ -525,6 +536,15 @@ namespace Yesla.Debugging
                             _overhead.transform.position = ct.position + ct.forward * 4.5f - ct.right * 3.5f + Vector3.up * 0.9f;
                             _overhead.transform.rotation = Quaternion.LookRotation(ct.position + ct.forward * 3f + Vector3.up * 0.2f - _overhead.transform.position, Vector3.up);
                             Say("overhead: camera beside the nose of " + car.VehicleName);
+                            break;
+                        }
+                        if (arg == "rear")
+                        {
+                            // 'overhead rear': behind and to the left of the tail at eye height, looking at the tail lamps.
+                            Transform ct = car.transform;
+                            _overhead.transform.position = ct.position - ct.forward * 6.5f - ct.right * 2.5f + Vector3.up * 1.3f;
+                            _overhead.transform.rotation = Quaternion.LookRotation(ct.position - ct.forward * 2f + Vector3.up * 0.6f - _overhead.transform.position, Vector3.up);
+                            Say("overhead: camera behind the tail of " + car.VehicleName);
                             break;
                         }
                         Say("overhead: camera " + height.ToString("F0") + " m above " + car.VehicleName + " at " + car.transform.position.ToString("F1") + ", car yaw " + car.transform.eulerAngles.y.ToString("F0") + " deg (screen up = car forward)");
