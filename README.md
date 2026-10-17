@@ -7,6 +7,8 @@
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 
+[![MLVScan Yesla.dll](https://mlvscan.com/attestations/att_jlftEJiWTrsW0p1EuqnAYy4m/badge.svg)](https://mlvscan.com/attestations/att_jlftEJiWTrsW0p1EuqnAYy4m)
+
 ![Yesla Assisted Driving](https://raw.githubusercontent.com/DooDesch-Mods/ScheduleOne-Yesla/main/docs/img/header.jpg)
 
 > An electric sedan for Schedule I that drives you where you send it.
