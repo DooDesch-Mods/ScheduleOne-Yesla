@@ -53,7 +53,8 @@ free right to use, change and publish it as part of the Software, under this lic
 
 Libraries and assets by other authors that come with the Software keep their own licenses. This
 license does not cover them. The car model is "Tesla 2018 Model 3" by Ameer Studio under CC BY 4.0; see
-LICENSE-MODEL.txt.
+LICENSE-MODEL.txt. The app icons are from Lucide under the ISC License, and the sounds are CC0 recordings
+from freesound.org. THIRD-PARTY-NOTICES.md lists each part with its source and license text.
 
 ## Permission
 

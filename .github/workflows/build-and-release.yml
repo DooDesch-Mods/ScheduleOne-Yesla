@@ -223,9 +223,11 @@ jobs:
             fi
           fi
           # Ship LICENSE + the maintained CHANGELOG inside the package. LICENSE-MODEL.txt is not optional: the car
-          # model is CC BY 4.0, and the credit has to travel with every copy of the DLL that embeds it.
+          # model is CC BY 4.0, and the credit has to travel with every copy of the DLL that embeds it. The same
+          # holds for THIRD-PARTY-NOTICES.md: the ISC and MIT texts of the embedded icons must ship with them.
           [ -f "LICENSE.md" ] && cp LICENSE.md release/ || true
           cp LICENSE-MODEL.txt release/
+          cp THIRD-PARTY-NOTICES.md release/
           [ -f "CHANGELOG.md" ] && cp CHANGELOG.md release/ || true
           # Recreate README.md as UTF-8 without BOM (Thunderstore renders it on the mod page).
           if [ -f "thunderstore/README.md" ]; then
@@ -258,6 +260,7 @@ jobs:
           cp bin/Debug/net6.0/Yesla.dll debug/
           [ -f "LICENSE.md" ] && cp LICENSE.md debug/ || true
           cp LICENSE-MODEL.txt debug/
+          cp THIRD-PARTY-NOTICES.md debug/
           (cd debug && zip -r "../Yesla_${{ steps.version-check.outputs.version }}_debug.zip" .)
 
       - name: Upload Debug ZIP
@@ -274,7 +277,7 @@ jobs:
         run: |
           mkdir -p nexus/mods
           cp release/Yesla.dll nexus/mods/
-          for f in README.md CHANGELOG.md LICENSE.md LICENSE-MODEL.txt; do
+          for f in README.md CHANGELOG.md LICENSE.md LICENSE-MODEL.txt THIRD-PARTY-NOTICES.md; do
             [ -f "release/$f" ] && cp "release/$f" nexus/ || true
           done
           (cd nexus && zip -r "../Yesla_${{ steps.version-check.outputs.version }}_nexus.zip" .)
@@ -325,6 +328,7 @@ jobs:
           files: |
             release/Yesla.dll
             release/LICENSE-MODEL.txt
+            release/THIRD-PARTY-NOTICES.md
             Yesla_${{ needs.build.outputs.version }}_debug.zip
           body: |
             ## Changes in ${{ needs.build.outputs.version }}
