@@ -46,6 +46,11 @@ namespace Yesla.Driving
         private const float StandingSpeed = 1f;
 
         internal const float MinKmh = 8f;
+        /// <summary>
+        /// Deceleration in m/s² of the car rolling with no throttle and no brake. The planner works out a second, lower
+        /// speed from it: above that one the car lifts off and rolls, and only brakes once rolling would not be enough.
+        /// </summary>
+        internal const float CoastDecel = 1.0f;
 
         private static readonly List<Vector3> Samples = new List<Vector3>(128);
         /// <summary>Path distances where the car's path enters (x) and leaves (y) a pedestrian crossing.</summary>
@@ -54,6 +59,8 @@ namespace Yesla.Driving
         internal struct Plan
         {
             internal float Kmh;
+            /// <summary>Above this speed rolling, not braking, already reaches every limit ahead in time.</summary>
+            internal float CoastKmh;
             internal string Why;
             /// <summary>The nearest thing in the lane, or null: its collider, distance along the path and speed in m/s.</summary>
             internal Collider Blocker;
@@ -81,6 +88,7 @@ namespace Yesla.Driving
             bool endReached = Resample(pts, seg, lerp, horizon, out float toEnd);
 
             float best = p.NoLimit ? p.MaxKmh / 3.6f : float.MaxValue;
+            float coast = best;
             string why = p.NoLimit ? "open road" : "limit";
 
             // Bends.
@@ -96,6 +104,7 @@ namespace Yesla.Driving
                 float radius = span / angle;
                 float vk = Mathf.Sqrt(p.LateralAccel * radius);
                 float allowed = Reach(vk, k * Step - reaction, a);
+                coast = Mathf.Min(coast, Reach(vk, k * Step - reaction, CoastDecel));
                 if (allowed < best) { best = allowed; why = "bend r=" + radius.ToString("F0") + " m in " + (k * Step).ToString("F0") + " m"; }
             }
 
@@ -103,6 +112,7 @@ namespace Yesla.Driving
             if (endReached)
             {
                 float allowed = Reach(EndSpeed, toEnd - ArriveWithin - reaction, a);
+                coast = Mathf.Min(coast, Reach(EndSpeed, toEnd - ArriveWithin - reaction, CoastDecel));
                 if (allowed < best) { best = allowed; why = "destination in " + toEnd.ToString("F0") + " m"; }
             }
 
@@ -111,6 +121,7 @@ namespace Yesla.Driving
             {
                 Vector3 toSpot = Autopilot.LotSpotAhead.Centre - car.transform.position; toSpot.y = 0f;
                 float allowed = Reach(Parking.HandOverKmh / 3.6f, toSpot.magnitude - Parking.HandOver - reaction, a);
+                coast = Mathf.Min(coast, Reach(Parking.HandOverKmh / 3.6f, toSpot.magnitude - Parking.HandOver - reaction, CoastDecel));
                 if (allowed < best) { best = allowed; why = "parking in " + toSpot.magnitude.ToString("F0") + " m"; }
             }
 
@@ -121,6 +132,7 @@ namespace Yesla.Driving
                 {
                     float vz = ZoneKmh(Samples[k]) * p.LimitFactor / 3.6f;
                     float allowed = Reach(vz, k * Step - reaction, a);
+                    coast = Mathf.Min(coast, Reach(vz, k * Step - reaction, CoastDecel));
                     if (allowed < best) { best = allowed; why = "zone " + (vz * 3.6f).ToString("F0") + " km/h in " + (k * Step).ToString("F0") + " m"; }
                 }
             }
@@ -139,6 +151,7 @@ namespace Yesla.Driving
                 float stop = at - gap;
                 if (otherSpeed < StandingSpeed && OffWalk(ref stop, halfLength, v, a, reaction)) what += ", waiting before the crossing";
                 float allowed = Reach(otherSpeed, stop - reaction, a);
+                coast = Mathf.Min(coast, Reach(otherSpeed, stop - reaction, CoastDecel));
                 if (allowed < best) { best = allowed; why = what + " in " + at.ToString("F0") + " m"; }
             }
 
@@ -148,10 +161,12 @@ namespace Yesla.Driving
                 float stop = cAt - p.StopGap;
                 if (OffWalk(ref stop, halfLength, v, a, reaction)) cWhat += ", waiting before the crossing";
                 float allowed = Reach(0f, stop - reaction, a);
+                coast = Mathf.Min(coast, Reach(0f, stop - reaction, CoastDecel));
                 if (allowed < best) { best = allowed; why = cWhat + " in " + cAt.ToString("F0") + " m"; }
             }
 
             result.Kmh = Mathf.Max(MinKmh, best * 3.6f);
+            result.CoastKmh = Mathf.Max(MinKmh, coast * 3.6f);
             result.Why = why;
             return result;
         }

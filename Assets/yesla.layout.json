@@ -34,9 +34,9 @@
     0.26196240682412625
   ],
   "lcdCenter": [
-    -0.00023640376346061956,
-    0.8112794745387862,
-    0.5062596242601903
+    -0.00023641162598911906,
+    0.8112791173678058,
+    0.5062593861462034
   ],
   "lcdNormal": [
     -1.3036369637120515e-05,
@@ -56,14 +56,21 @@
     ]
   },
   "triangles": {
-    "Body_LOD0": 41166,
+    "Body_LOD0": 36396,
     "Body_LOD1": 15257,
     "Body_LOD2": 3874,
     "Wheel": 3780,
     "Wheel_LOD1": 1294,
     "Body_Viz": 7347,
-    "Cabin_LOD0": 16917,
-    "Cabin_HI": 73269
+    "Cabin_LOD0": 16662,
+    "Cabin_HI": 73173,
+    "Steering": 4104,
+    "Wiper_R": 276,
+    "Wiper_L": 270,
+    "Bonnet": 1100,
+    "Boot": 4015,
+    "Caliper_F": 699,
+    "Caliper_R": 699
   },
   "materials": [
     "Trim_Black",
@@ -76,10 +83,10 @@
     "Light_IndicatorL",
     "Light_IndicatorR",
     "Reflector_Red.light_pantulan",
-    "Light_Reverse",
     "Reflector_Red",
-    "Licence_Plate",
     "Light_Cover",
+    "Light_Reverse",
+    "Licence_Plate",
     "Tyre_Rubber",
     "Rim_Alloy",
     "Brake_Disc",
@@ -87,9 +94,73 @@
     "Interior_Leather_White",
     "Interior_Light",
     "Underbody",
-    "LCD"
+    "LCD",
+    "Caliper"
   ],
   "wheelSide": "Wheel node is the LEFT wheel (outward face +X, car faces +Z); mirror in X for FR/RR",
+  "movingParts": {
+    "Steering": {
+      "pivot": [
+        0.41861942410469055,
+        0.8200820684432983,
+        0.40361034870147705
+      ],
+      "axis": [
+        0.0,
+        -0.30278605222702026,
+        0.9530586004257202
+      ]
+    },
+    "Wiper_R": {
+      "pivot": [
+        0.07388599216938019,
+        0.8214211463928223,
+        1.291458249092102
+      ],
+      "axis": [
+        0.0,
+        0.8166904449462891,
+        0.5770758986473083
+      ]
+    },
+    "Wiper_L": {
+      "pivot": [
+        0.6286652684211731,
+        0.8515158891677856,
+        1.1265590190887451
+      ],
+      "axis": [
+        0.0,
+        0.8857826590538025,
+        0.46410030126571655
+      ]
+    },
+    "Bonnet": {
+      "pivot": [
+        0.0,
+        0.8797735571861267,
+        1.0497673749923706
+      ],
+      "axis": [
+        1.0,
+        0.0,
+        -0.0
+      ]
+    },
+    "Boot": {
+      "pivot": [
+        0.0,
+        1.1913917064666748,
+        -1.629184603691101
+      ],
+      "axis": [
+        1.0,
+        0.0,
+        -0.0
+      ]
+    }
+  },
+  "caliperSide": "Caliper_F/Caliper_R are the LEFT calipers centred on their axle; mirror in X for the right side",
   "lcdSize": [
     0.3377971329573268,
     0.2651212501669614

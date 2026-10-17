@@ -55,6 +55,8 @@ namespace Yesla.Phone
                 .OnCall("yesla.parking", mode => Guard("parking", () => SetParking(mode)))
                 .OnCall("yesla.summon", _ => Guard("summon", ToggleSummon))
                 .OnCall("yesla.goto", _ => Guard("goto", GoToTarget))
+                .OnCall("yesla.engage", _ => Guard("engage", Engage))
+                .OnCall("yesla.lid", which => Guard("lid", () => Answer(Remote.ToggleLid(MyCar(), which))))
                 .OnCall("yesla.honk", _ => Guard("honk", () => Answer(Remote.Honk(MyCar()))))
                 .OnCall("yesla.lock", _ => Guard("lock", () => Answer(Remote.ToggleLock(MyCar()))))
                 .OnCall("yesla.sentry", _ => Guard("sentry", () => Answer(Remote.ToggleSentry(MyCar()))))
@@ -201,6 +203,9 @@ namespace Yesla.Phone
                     .Prop("name", car.VehicleName)
                     .Prop("speed", Mathf.Abs(car.Speed_Kmh) * Visual.VizOverlay.ShownSpeed)
                     .Prop("inside", Autopilot.CurrentCar() != null && Autopilot.CurrentCar().Pointer == car.Pointer)
+                    .Prop("driver", car.LocalPlayerIsDriver)
+                    .Prop("frunk", MovingParts.LidOpen(car, "frunk"))
+                    .Prop("trunk", MovingParts.LidOpen(car, "trunk"))
                     .Prop("distance", local != null ? Vector3.Distance(local.transform.position, car.transform.position) : 0)
                     .Prop("mine", Fleet.IsMine(car))
                     .Prop("locked", rec != null && rec.Locked)
@@ -358,6 +363,13 @@ namespace Yesla.Phone
         }
 
         /// <summary>A refusal reason becomes the page's "error:" answer, null becomes "ok".</summary>
+        /// <summary>The Start/Stop button at the wheel: what the engage key does.</summary>
+        private static string Engage()
+        {
+            if (Autopilot.Active) { Autopilot.Disengage("stopped from the phone"); return "ok"; }
+            return Autopilot.Engage(out string why) ? "ok" : Answer(char.ToUpperInvariant(why[0]) + why.Substring(1) + ".");
+        }
+
         private static string Answer(string refused)
         {
             if (refused == null) return "ok";

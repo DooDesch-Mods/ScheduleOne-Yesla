@@ -124,6 +124,12 @@ namespace Yesla.Driving
         private const float CornerReach = 8f;
         /// <summary>Gap the car stops short of a post at a corner.</summary>
         private const float CornerGap = 0.5f;
+        /// <summary>
+        /// Rolling instead of braking: up to this many km/h over the target the car rolls rather than brake (vanilla's
+        /// regulator brakes from 0.6 km/h over), and it never rolls below <see cref="RollFloorKmh"/>, where a stop needs
+        /// the brake.
+        /// </summary>
+        private const float RollBandKmh = 6f, RollFloorKmh = 12f;
         /// <summary>A post at a side moves the aim point this far away from it, at these rates out and back.</summary>
         private const float NudgeMetres = 1f;
         private const float NudgeRate = 2f;
@@ -152,6 +158,9 @@ namespace Yesla.Driving
             internal float CheckpointWait;
 
             internal float PlanKmh = SpeedPlanner.MinKmh;
+            internal float CoastKmh = float.MaxValue;
+            internal bool Rolling;                 // last LateTick took the throttle away, for the log
+            internal float RollLogAt = -10f;
             internal string PlanWhy = string.Empty;
             internal float NextPlan;
 
@@ -439,6 +448,7 @@ namespace Yesla.Driving
                 f.NextPlan = now + PlanSeconds;
                 SpeedPlanner.Plan plan = SpeedPlanner.Run(car, agent, pts, seg, lerp, f.Profile, f.Manoeuvre == Manoeuvre.Follow ? f.Avoid : 0f);
                 f.PlanKmh = plan.Kmh;
+                f.CoastKmh = plan.CoastKmh;
                 f.PlanWhy = plan.Why;
                 ApplyFlags(agent, f.Profile, f.PlanKmh);
                 if (f.Manoeuvre == Manoeuvre.Follow) UpdateAvoid(f, car, plan, pos);
@@ -1012,7 +1022,25 @@ namespace Yesla.Driving
                 }
                 else if (f.Manoeuvre == Manoeuvre.Turn && f.TurnDrive > 0 && car.Speed_Kmh < TurnKmh)
                     car.throttleOverride = Mathf.Max(car.throttleOverride, TurnThrottle);
+                else if (f.Manoeuvre == Manoeuvre.Follow) Roll(f, car);
             }
+        }
+
+        /// <summary>
+        /// Lifts off where rolling is enough: early, once the speed is above what rolling still slows down in time for
+        /// (<see cref="SpeedPlanner.Plan.CoastKmh"/>), and instead of a light brake a little over the target. Brake
+        /// lights stay off while it rolls, since vanilla only lights them for a negative throttle.
+        /// </summary>
+        private static void Roll(Follow f, LandVehicle car)
+        {
+            float v = car.Speed_Kmh, target = car.Agent.targetSpeed, th = car.throttleOverride;
+            bool roll = v > RollFloorKmh && ((th > 0f && v >= f.CoastKmh) || (th < 0f && target > RollFloorKmh && v - target < RollBandKmh));
+            if (roll) car.throttleOverride = 0f;
+            if (roll == f.Rolling || Time.time - f.RollLogAt < 2f) return;
+            f.Rolling = roll;
+            f.RollLogAt = Time.time;
+            Core.Log.Msg("[PathFollower] " + f.Who + (roll ? " rolls" : " stops rolling") + " at " + v.ToString("F0") + " km/h (target "
+                         + target.ToString("F0") + ", roll below " + (f.CoastKmh > 999f ? "-" : f.CoastKmh.ToString("F0")) + ", plan " + f.PlanWhy + ").");
         }
 
         /// <summary>The closest front sensor that sees something, or null.</summary>

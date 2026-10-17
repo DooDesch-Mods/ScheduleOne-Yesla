@@ -730,6 +730,48 @@ namespace Yesla.Debugging
                         break;
                     }
 
+                    case "lid":
+                    {
+                        // lid frunk|trunk            - what the app's Frunk and Trunk buttons do
+                        if (parts.Length < 3) { Say("lid: frunk or trunk"); break; }
+                        string refused = Net.Remote.ToggleLid(Phone.YeslaApp.MyCar(), parts[2]);
+                        Say("lid: " + (refused ?? parts[2] + " toggled"));
+                        break;
+                    }
+
+                    case "parts":
+                    {
+                        // parts                      - the moving parts of the nearest own Yesla: steering, lids, wipers
+                        Say("parts: " + Vehicle.MovingParts.Describe(Phone.YeslaApp.MyCar()));
+                        break;
+                    }
+
+                    case "storage":
+                    {
+                        // storage front|rear|close   - opens the nearest own Yesla's storage the way "Access frunk" or
+                        //                              "Access trunk" does, or closes the storage menu
+                        string end = parts.Length > 2 ? parts[2] : "rear";
+                        if (end == "close") { Il2CppScheduleOne.DevUtilities.Singleton<Il2CppScheduleOne.UI.StorageMenu>.Instance?.CloseMenu(); Say("storage: menu closed"); break; }
+                        LandVehicle car = Phone.YeslaApp.MyCar();
+                        if (car == null) { Say("storage: no own Yesla"); break; }
+                        Il2CppScheduleOne.Storage.StorageEntityInteractable pick = null;
+                        foreach (var point in car.GetComponentsInChildren<Il2CppScheduleOne.Storage.StorageEntityInteractable>(true))
+                            if ((point.gameObject.name == Vehicle.MovingParts.FrunkName) == (end == "front")) { pick = point; break; }
+                        if (pick == null) { Say("storage: no " + end + " access point on " + car.VehicleName); break; }
+                        pick.StartInteract();
+                        Say("storage: opened at " + pick.gameObject.name + ", prompt '" + pick.message + "'");
+                        break;
+                    }
+
+                    case "rain":
+                    {
+                        // rain on|off|auto           - forces the wipers' rain reading; auto reads the weather again
+                        string mode = parts.Length > 2 ? parts[2] : "auto";
+                        Vehicle.MovingParts.RainOverride = mode == "on" ? true : mode == "off" ? false : (bool?)null;
+                        Say("rain: " + (Vehicle.MovingParts.RainOverride.HasValue ? (Vehicle.MovingParts.RainOverride.Value ? "forced on" : "forced off") : "from the weather"));
+                        break;
+                    }
+
                     case "lamps":
                     {
                         // lamps on|off               - the headlights of the nearest own Yesla

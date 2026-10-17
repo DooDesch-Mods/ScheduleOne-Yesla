@@ -82,7 +82,7 @@ function metreParts(m) {
 function driveLine() {
   var d = state.drive || {};
   switch (d.state) {
-    case 'Ready': return ['Press ' + d.key + ' in the driver seat.'];
+    case 'Ready': return [atWheel() ? 'Tap Start or press ' + d.key + '.' : 'Press ' + d.key + ' in the driver seat.'];
     case 'Driving':
       var parts = ['Driving'];
       if (state.car) parts.push('·', String(Math.round(state.car.speed)), 'km/h');
@@ -123,6 +123,16 @@ function cleanPlate(raw) {
 function setClass(el, cls) { if (el.className !== cls) el.className = cls; }
 function setText(el, text) { if (el.textContent !== text) el.textContent = text; }
 
+// The local player sits at the wheel of the car the app shows.
+function atWheel() { return !!(state.car && state.car.inside && state.car.driver); }
+
+// The destination button: an icon and a label.
+function setSend(label, icon) {
+  setText($('send-t'), label);
+  var img = $('send-i'), src = 'i-' + icon + '.png';
+  if (img.getAttribute('src') !== src) img.setAttribute('src', src);
+}
+
 // A line of text as pieces, one element per piece. Sideload rebuilds the whole page when a text changes size, but
 // rewrites a text in place when it keeps its size; with the numbers in pieces of their own, a speed going from 23
 // to 24 km/h touches one small box instead of the page. Layout trims spaces at a piece's edge, even non-breaking
@@ -156,8 +166,15 @@ function setStatus(kind) {
 function setTile(id, disabled, on) {
   var b = $(id);
   b.disabled = disabled;
-  setClass(b, on ? 'tile on' : 'tile');
-  setClass($(id + '-t'), disabled ? 'tl off' : 'tl');
+  setClass(b, disabled ? 'tile off' : on ? 'tile on' : 'tile');
+}
+
+// A lid button names the action it does next: Open while it is shut, Close while it stands open.
+function setLid(id, disabled, open) {
+  var b = $(id);
+  b.disabled = disabled;
+  setClass(b, (id === 'c-trunk' ? 'lid right' : 'lid') + (disabled ? ' off' : open ? ' on' : ''));
+  setText($(id + '-s'), open ? 'Close' : 'Open');
 }
 
 function show(el, on) {
@@ -515,16 +532,17 @@ function renderTiles() {
   var coming = state.summon && (state.summon.state === 'Coming' || state.summon.state === 'Going');
 
   setTile('c-summon', !mine || car.inside, coming);
-  setText($('c-summon-t'), coming ? 'Stop' : 'Summon');
+  $('c-summon-i').setAttribute('src', coming ? 'i-stop.png' : 'i-summon.png');
 
   setTile('c-honk', !mine, false);
 
   var locked = mine && car.locked;
   setTile('c-lock', !mine, locked);
-  setText($('c-lock-t'), locked ? 'Locked' : 'Unlocked');
   $('c-lock-i').setAttribute('src', locked ? 'i-lock.png' : 'i-unlock.png');
 
   setTile('c-sentry', !mine, mine && car.sentry);
+  setLid('c-frunk', !mine, mine && car.frunk);
+  setLid('c-trunk', !mine, mine && car.trunk);
 }
 
 function control(call, arg) {
@@ -581,15 +599,23 @@ function renderCard() {
     setClass(name, 'dn');
     setPieces(line, [selected.meta || '']);
     setClass(line, 'dl');
-    setText(send, 'Send to car');
+    setSend('Send to car', 'send');
     send.disabled = !(state.car && state.car.mine);
     clear.disabled = false;
     return;
   }
-  // With a destination sent, the same button sends the empty car there to park, and stops it on the way.
+  // With a destination sent, the same button sends the empty car there to park, and stops it on the way. At the
+  // wheel it starts and stops Assisted Driving, like the engage key.
   var going = state.summon && state.summon.state === 'Going';
-  setText(send, going ? 'Stop' : (state.dest ? 'Go to target' : 'Send to car'));
-  send.disabled = going ? false : !(state.dest && state.car && state.car.mine && !state.car.inside);
+  var st0 = state.drive ? state.drive.state : '';
+  if (atWheel()) {
+    var active = st0 === 'Driving' || st0 === 'Parking';
+    setSend(active ? 'Stop' : 'Start', active ? 'stop' : 'go');
+    send.disabled = !active && !(state.dest && state.car.mine);
+  } else {
+    setSend(going ? 'Stop' : (state.dest ? 'Go to target' : 'Send to car'), going ? 'stop' : (state.dest ? 'go' : 'send'));
+    send.disabled = going ? false : !(state.dest && state.car && state.car.mine && !state.car.inside);
+  }
   if (state.dest) {
     setText(name, state.dest.label);
     setClass(name, 'dn');
@@ -621,6 +647,7 @@ function selectPoint(x, y) {
 
 function send() {
   if (!selected) {
+    if (atWheel()) { control('yesla.engage'); return; }
     var going = state.summon && state.summon.state === 'Going';
     if (!going && !state.dest) return;
     if (control(going ? 'yesla.summon' : 'yesla.goto') && !going) fitTo(state.car, state.dest);
@@ -739,6 +766,8 @@ $('c-summon').addEventListener('click', function () {
 $('c-honk').addEventListener('click', function () { control('yesla.honk'); });
 $('c-lock').addEventListener('click', function () { control('yesla.lock'); });
 $('c-sentry').addEventListener('click', function () { control('yesla.sentry'); });
+$('c-frunk').addEventListener('click', function () { control('yesla.lid', 'frunk'); });
+$('c-trunk').addEventListener('click', function () { control('yesla.lid', 'trunk'); });
 PROFILES.forEach(function (id) {
   $('p-' + id).addEventListener('click', function () { control('yesla.profile', id); });
 });

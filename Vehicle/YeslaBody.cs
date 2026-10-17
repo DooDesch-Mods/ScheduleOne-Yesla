@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
+using Il2CppScheduleOne.Interaction;
+using Il2CppScheduleOne.Storage;
 using Il2CppScheduleOne.Vehicles;
 
 namespace Yesla.Vehicle
@@ -26,7 +28,12 @@ namespace Yesla.Vehicle
 
         private static readonly Color HeadOn = new Color(1f, 0.97f, 0.9f);
         private static readonly Color BrakeOn = new Color(1f, 0.03f, 0.02f);
+        /// <summary>The tail lamps with the headlights on: the brake lamps at a quarter of their glow.</summary>
+        private static readonly Color TailOn = new Color(0.25f, 0.008f, 0.005f);
         private static readonly Color ReverseOn = Color.white;
+
+        /// <summary>Tail lamp material, shared by every Yesla; <see cref="MovingParts"/> puts it on the brake lamps.</summary>
+        internal static Material TailMat;
 
         /// <summary>
         /// Car paint: a metallic flake under a clear coat. The model's paint is a flat dielectric at 0.72 smoothness,
@@ -73,14 +80,39 @@ namespace Yesla.Vehicle
                 {
                     MeshRenderer r = AddPart(lodRoot.transform, part, layer);
                     lods[i].Add(r);
-                    // Lamp materials are named after their class ("Light_Brake" or "Light_Brake.left_rear_light"), so the
-                    // groups are found by prefix. Light_Cover, the smoked lens over the tail lamps, is in no group.
-                    if (GlbModel.InGroup(part.MaterialName, "Paint")) paint.Add(r);
-                    else if (GlbModel.InGroup(part.MaterialName, "Light_Head")) head.Add(r);
-                    else if (GlbModel.InGroup(part.MaterialName, "Light_Brake")) brake.Add(r);
-                    else if (GlbModel.InGroup(part.MaterialName, "Light_Reverse")) reverse.Add(r);
-                    else if (i == 0 && GlbModel.InGroup(part.MaterialName, "Licence_Plate")) Plate.Fit(lodRoot.transform, r, layer);
+                    Sort(r, part, lodRoot.transform, i == 0);
                 }
+            }
+
+            // Lamp materials are named after their class ("Light_Brake" or "Light_Brake.left_rear_light"), so the
+            // groups are found by prefix. Light_Cover, the smoked lens over the tail lamps, is in no group.
+            void Sort(MeshRenderer r, GlbModel.Part part, Transform parent, bool lod0)
+            {
+                if (GlbModel.InGroup(part.MaterialName, "Paint")) paint.Add(r);
+                else if (GlbModel.InGroup(part.MaterialName, "Light_Head")) head.Add(r);
+                else if (GlbModel.InGroup(part.MaterialName, "Light_Brake")) brake.Add(r);
+                else if (GlbModel.InGroup(part.MaterialName, "Light_Reverse")) reverse.Add(r);
+                else if (lod0 && GlbModel.InGroup(part.MaterialName, "Licence_Plate")) Plate.Fit(parent, r, layer);
+            }
+
+            // The parts that move hang from a pivot at their hinge or axle (MovingParts turns the pivots). They are
+            // drawn with LOD0; LOD1 and LOD2 carry them closed and still.
+            int moving = 0;
+            foreach (var hinge in model.Hinges)
+            {
+                if (!model.Nodes.TryGetValue(hinge.Key, out List<GlbModel.Part> parts)) { Core.Log.Warning("[Body] hinge " + hinge.Key + " has no meshes."); continue; }
+                var pivot = new GameObject(MovingParts.PivotPrefix + hinge.Key);
+                pivot.layer = layer;
+                pivot.transform.SetParent(root.transform, false);
+                pivot.transform.localPosition = hinge.Value.Pivot;
+                MovingParts.Axes[hinge.Key] = hinge.Value.Axis;
+                foreach (GlbModel.Part part in parts)
+                {
+                    MeshRenderer r = AddPart(pivot.transform, part, layer);
+                    lods[0].Add(r);
+                    Sort(r, part, pivot.transform, true);
+                }
+                moving++;
             }
 
             // The cabin: Cabin_LOD0 is drawn with LOD0; Cabin_HI, the detailed one, stays outside the LODGroup and only
@@ -132,9 +164,10 @@ namespace Yesla.Vehicle
             int wheels = FitWheels(lv, model, layout, layer);
             FitBounds(lv, layout, modelOffsetY);
             HideExhaust(lodGroup.transform);
+            AddFrunk(car, layout);
 
             Core.Log.Msg("[Body] Yesla body on: " + hidden + " donor renderer(s) off, LODs " + lods[0].Count + "/" + lods[1].Count + "/" + lods[2].Count
-                       + " part(s), " + paint.Count + " paint, lights " + head.Count + " head / " + brake.Count + " brake / " + reverse.Count + " reverse, " + wheels + " wheel(s).");
+                       + " part(s), " + moving + " moving part(s), " + paint.Count + " paint, lights " + head.Count + " head / " + brake.Count + " brake / " + reverse.Count + " reverse, " + wheels + " wheel(s).");
             return true;
         }
 
@@ -157,17 +190,17 @@ namespace Yesla.Vehicle
             Transform t = car.transform;
             bool[] found = new bool[2];
             Bounds[] side = new Bounds[2];
-            // Mesh bounds, not renderer bounds: the prefab is inactive, and an inactive renderer has no world bounds.
+            // Vertices, not renderer bounds: the prefab is inactive, and an inactive renderer has no world bounds. One
+            // head lamp part may hold both lamps, so every vertex counts for the side it is on.
             foreach (MeshRenderer r in head)
             {
                 MeshFilter mf = r != null ? r.GetComponent<MeshFilter>() : null;
                 if (mf == null || mf.sharedMesh == null) continue;
-                Bounds b = mf.sharedMesh.bounds;
-                int s = t.InverseTransformPoint(r.transform.TransformPoint(b.center)).x < 0f ? 0 : 1;
-                for (int k = 0; k < 8; k++)
+                Matrix4x4 toCar = t.worldToLocalMatrix * r.transform.localToWorldMatrix;
+                foreach (Vector3 v in mf.sharedMesh.vertices)
                 {
-                    Vector3 corner = new Vector3((k & 1) == 0 ? b.min.x : b.max.x, (k & 2) == 0 ? b.min.y : b.max.y, (k & 4) == 0 ? b.min.z : b.max.z);
-                    Vector3 local = t.InverseTransformPoint(r.transform.TransformPoint(corner));
+                    Vector3 local = toCar.MultiplyPoint3x4(v);
+                    int s = local.x < 0f ? 0 : 1;
                     if (!found[s]) { side[s] = new Bounds(local, Vector3.zero); found[s] = true; }
                     else side[s].Encapsulate(local);
                 }
@@ -235,6 +268,7 @@ namespace Yesla.Vehicle
             {
                 lights.brakeLightMat_Off = brakeOff;
                 lights.brakeLightMat_On = GlbModel.Emissive(brakeOff, BrakeOn, "Yesla_Light_Brake_On");
+                TailMat = GlbModel.Emissive(brakeOff, TailOn, "Yesla_Light_Tail_On");
             }
 
             lights.hasReverseLights = reverse.Count > 0;
@@ -243,7 +277,9 @@ namespace Yesla.Vehicle
             if (reverseOff != null)
             {
                 lights.reverseLightMat_Off = reverseOff;
-                lights.reverseLightMat_On = GlbModel.Emissive(reverseOff, ReverseOn, "Yesla_Light_Reverse_On");
+                // The reverse lamp's texture is mostly dark, and the smoked cover sits over it: lit through the
+                // texture it barely shows. It glows flat white instead.
+                lights.reverseLightMat_On = GlbModel.Emissive(reverseOff, ReverseOn, "Yesla_Light_Reverse_On", useMap: false);
             }
         }
 
@@ -307,6 +343,24 @@ namespace Yesla.Vehicle
                 if (r1.Count > 0) lods[1] = new LOD { screenRelativeTransitionHeight = 0.004f, renderers = ToArray(r1) };
                 g.SetLODs(lods);
                 g.RecalculateBounds();
+
+                // The brake caliper: on the wheel, not on its model, so it steers (MovingParts) but does not spin.
+                if (model.Nodes.TryGetValue(front ? "Caliper_F" : "Caliper_R", out List<GlbModel.Part> caliper))
+                {
+                    var cal = new GameObject(MovingParts.CaliperName);
+                    cal.layer = layer;
+                    cal.transform.SetParent(t, false);
+                    cal.transform.position = w.wheelModel.position;
+                    cal.transform.localScale = new Vector3((right ? -1f : 1f) / scale, 1f / scale, 1f / scale);
+                    var rc = new List<Renderer>();
+                    foreach (GlbModel.Part p in caliper) rc.Add(AddPart(cal.transform, p, layer));
+                    LODGroup cg = cal.AddComponent<LODGroup>();
+                    var clods = new Il2CppReferenceArray<LOD>(1);
+                    clods[0] = new LOD { screenRelativeTransitionHeight = 0.03f, renderers = ToArray(rc) };
+                    cg.SetLODs(clods);
+                    cg.RecalculateBounds();
+                }
+                else Core.Log.Warning("[Body] the model has no " + (front ? "Caliper_F" : "Caliper_R") + " - wheel " + t.name + " has no caliper.");
                 n++;
             }
 
@@ -332,6 +386,30 @@ namespace Yesla.Vehicle
             float centreZ = (layout.MinZ + layout.MaxZ) * 0.5f + ModelOffsetZ;
             b.localPosition = new Vector3(0f, (bottom + top) * 0.5f, centreZ);
             b.localScale = new Vector3(layout.BodyWidth, layout.Height, layout.MaxZ - layout.MinZ);
+        }
+
+        /// <summary>
+        /// A second way into the car's storage at the nose, "Access frunk": a copy of the donor's trunk access point,
+        /// moved as far in from the front bumper as the original sits in from the rear one. It finds the same
+        /// StorageEntity (GetComponentInParent), so both ends open the same slots; MovingParts opens the lid at the end
+        /// it was opened from.
+        /// </summary>
+        private static void AddFrunk(GameObject car, YeslaLayout layout)
+        {
+            var points = car.GetComponentsInChildren<StorageEntityInteractable>(true);
+            if (points.Length == 0) { Core.Log.Warning("[Body] the donor has no storage access point - the Yesla has no frunk."); return; }
+            Transform trunk = points[0].transform;
+            Transform ct = car.transform;
+            Vector3 at = ct.InverseTransformPoint(trunk.position);
+            float inset = at.z - (layout.MinZ + ModelOffsetZ);
+            GameObject frunk = UnityEngine.Object.Instantiate(trunk.gameObject, trunk.parent);
+            frunk.name = MovingParts.FrunkName;
+            frunk.transform.position = ct.TransformPoint(new Vector3(at.x, at.y, layout.MaxZ + ModelOffsetZ - inset));
+            frunk.transform.rotation = trunk.rotation;
+            InteractableObject io = frunk.GetComponent<InteractableObject>();
+            if (io != null) io.SetMessage("Access frunk");
+            else Core.Log.Warning("[Body] the frunk access point has no InteractableObject - it keeps the trunk's prompt.");
+            Core.Log.Msg("[Body] frunk access point at " + ct.InverseTransformPoint(frunk.transform.position).ToString("F2") + " (trunk " + at.ToString("F2") + ", " + trunk.name + ").");
         }
 
         /// <summary>An electric car has no exhaust; the donor's tailpipe smoke goes.</summary>

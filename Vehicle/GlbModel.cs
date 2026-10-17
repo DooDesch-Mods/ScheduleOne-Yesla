@@ -27,6 +27,18 @@ namespace Yesla.Vehicle
         /// <summary>Parts per glTF node name (Body_LOD0, Body_LOD1, Body_LOD2, Wheel, Wheel_LOD1).</summary>
         internal readonly Dictionary<string, List<Part>> Nodes = new Dictionary<string, List<Part>>();
 
+        /// <summary>
+        /// A moving part's hinge: the node's translation (its meshes are stored around it) and the axis it turns about,
+        /// both in Unity model space. Only the moving parts (Steering, Wiper_L/R, Bonnet, Boot) carry one.
+        /// </summary>
+        internal readonly Dictionary<string, Hinge> Hinges = new Dictionary<string, Hinge>();
+
+        internal struct Hinge
+        {
+            internal Vector3 Pivot;
+            internal Vector3 Axis;
+        }
+
         /// <summary>One material per glTF material name, shared by every part and every car.</summary>
         internal readonly Dictionary<string, Material> Materials = new Dictionary<string, Material>();
 
@@ -132,9 +144,23 @@ namespace Yesla.Vehicle
                     parts.Add(new Part { Mesh = mesh, Material = mi >= 0 ? materials[mi] : null, MaterialName = mi >= 0 ? materialNames[mi] : "none" });
                 }
                 model.Nodes[nodeName] = parts;
+
+                var tr = node["translation"] as JArray;
+                var axis = node["extras"]?["axis"] as JArray;
+                if (tr != null || axis != null)
+                {
+                    if (tr == null || axis == null || tr.Count != 3 || axis.Count != 3)
+                        Core.Log.Warning("[Model] node '" + nodeName + "' has a pivot without an axis or the other way round - it cannot move.");
+                    else
+                        model.Hinges[nodeName] = new Hinge
+                        {
+                            Pivot = new Vector3(-(float)tr[0], (float)tr[1], (float)tr[2]),
+                            Axis = new Vector3(-(float)axis[0], (float)axis[1], (float)axis[2]).normalized,
+                        };
+                }
             }
 
-            Core.Log.Msg("[Model] yesla.glb read: " + model.Nodes.Count + " node(s), " + materials.Count + " material(s), " + triangles + " triangles.");
+            Core.Log.Msg("[Model] yesla.glb read: " + model.Nodes.Count + " node(s), " + model.Hinges.Count + " moving, " + materials.Count + " material(s), " + triangles + " triangles.");
             return model;
         }
 
@@ -198,11 +224,11 @@ namespace Yesla.Vehicle
         /// emission map, so the lamp's own pattern glows in the glow colour. A flat lamp takes the glow colour as its
         /// base colour.
         /// </summary>
-        internal static Material Emissive(Material baseMat, Color glow, string name)
+        internal static Material Emissive(Material baseMat, Color glow, string name, bool useMap = true)
         {
             var mat = new Material(baseMat) { name = name };
             mat.hideFlags |= HideFlags.DontUnloadUnusedAsset;
-            Texture map = baseMat.HasProperty("_BaseMap") ? baseMat.GetTexture("_BaseMap") : null;
+            Texture map = useMap && baseMat.HasProperty("_BaseMap") ? baseMat.GetTexture("_BaseMap") : null;
             if (map != null) mat.SetTexture("_EmissionMap", map);
             else mat.SetColor("_BaseColor", glow);
             mat.EnableKeyword("_EMISSION");

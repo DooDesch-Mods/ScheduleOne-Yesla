@@ -55,26 +55,37 @@ body {
 .views { width: 276px; height: 190px; }
 .views .pic { position: absolute; left: 0; top: 0; }
 
+/* Frunk and trunk sit on the picture's lower corners as words, the way the Tesla app labels them on the car. */
+.lid { position: absolute; left: 16px; bottom: 4px; padding: 6px 8px; border-radius: 8px; gap: 1px; }
+.lid.right { left: auto; right: 16px; align-items: flex-end; }
+.lid:hover { background: #ffffff12; }
+.lid:active { background: #ffffff08; }
+.ln { font-size: 12px; font-weight: 700; color: var(--text); }
+.ls { font-size: 11px; color: var(--muted); }
+.lid.on .ls { color: var(--accent-hi); }
+.lid.off, .lid.off:hover { background: #00000000; }
+.lid.off .ln, .lid.off .ls { color: #4d5056; }
+
 .stats { flex-direction: row; margin-top: 8px; }
 .stat { flex: 1; align-items: center; gap: 1px; }
 .stat .v { font-size: 15px; font-weight: 700; white-space: nowrap; }
 .stat .k { font-size: 10px; color: var(--muted); }
 
-/* Remote controls: a round button and its label under it. */
-.ctrls { flex-direction: row; justify-content: space-between; margin-top: 16px; padding: 0 4px; }
-.ctl { align-items: center; gap: 5px; width: 52px; }
-.tile {
-  width: 44px; height: 44px; border-radius: 22px; background: var(--raised);
-  align-items: center; justify-content: center; box-shadow: 0 2px 6px #00000080;
+/* Remote controls: one quiet strip of icons under the car, like the quick controls of the Tesla app. A control
+   that is on gets an accent wash; the words for its state are in the status line under the name. */
+.ctrls {
+  flex-direction: row; gap: 2px; margin-top: 12px; padding: 4px;
+  border-radius: 14px; background: #1a1b1f; box-shadow: 0 6px 14px #00000066;
 }
-.tile:hover { background: var(--raised-hi); }
-.tile:active { background: #1c1d21; }
-.tile:disabled { background: #17181b; }
-.tile.on { background: var(--accent); }
-.tile.on:hover { background: var(--accent-hi); }
-.ico { width: 20px; height: 20px; }
-.tl { font-size: 10px; color: var(--soft); white-space: nowrap; }
-.tl.off { color: #4d5056; }
+.tile { flex: 1; height: 42px; border-radius: 10px; align-items: center; justify-content: center; }
+.tile:hover { background: #ffffff12; }
+.tile:active { background: #ffffff08; }
+.tile.on { background: #3e6ae14d; }
+.tile.on:hover { background: #3e6ae166; }
+.tile.off, .tile.off:hover { background: #00000000; }
+.ico { width: 20px; height: 20px; opacity: 0.82; }
+.tile.on .ico { opacity: 1; }
+.tile.off .ico { opacity: 0.25; }
 
 /* ---- tabs --------------------------------------------------------------------------------------------------- */
 
@@ -201,12 +212,13 @@ body {
 
 .btn {
   height: 30px; padding: 0 14px; border-radius: 8px; background: var(--accent); color: #ffffff;
-  font-size: 12px; font-weight: 700; align-items: center; justify-content: center; flex: none;
+  font-size: 12px; font-weight: 700; flex-direction: row; gap: 6px; align-items: center; justify-content: center; flex: none;
 }
+.bt { white-space: nowrap; }
 .btn:hover { background: var(--accent-hi); }
 .btn:active { background: var(--accent-lo); }
 .btn:disabled { background: #283456; color: #7f8aa8; }
-#send { width: 96px; }
+#send { width: 122px; padding: 0 8px; }
 .btn.ghost { background: #2a2c31; color: #d6d8dc; font-weight: 400; }
 .btn.ghost:hover { background: #34363c; }
 .btn.ghost:disabled { background: #1b1c20; color: #55585e; }

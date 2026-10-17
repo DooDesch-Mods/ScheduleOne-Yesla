@@ -55,6 +55,25 @@ namespace Yesla.Net
             return null;
         }
 
+        /// <summary>Opens or closes the frunk or the boot lid from the phone; every player sees it.</summary>
+        internal static string ToggleLid(LandVehicle car, string which)
+        {
+            if (car == null) return "No Yesla.";
+            if (which != "frunk" && which != "trunk") return "Unknown lid.";
+            if (!Fleet.IsMine(car)) return "This Yesla is not yours.";
+            YeslaNet.ToHost("req.lid", Id(car), Fleet.MyCode(), which, MovingParts.LidOpen(car, which) ? "0" : "1");
+            return null;
+        }
+
+        /// <summary>A player opened the car's storage at the frunk (front) or the trunk; the lid at that end opens.</summary>
+        internal static void StorageSide(LandVehicle car, bool front)
+        {
+            if (car == null) return;
+            // Locally at once, so the right lid moves before the host answers; the host tells everyone else.
+            MovingParts.SetStorageSide(Fleet.NetId(car), front);
+            YeslaNet.ToHost("req.side", Id(car), front ? "front" : "rear");
+        }
+
         /// <summary>Tell the host this car now stands in a lot spot, so no NPC car is parked into it.</summary>
         internal static void TakeSpot(LandVehicle car, ParkTarget spot)
         {
@@ -130,6 +149,22 @@ namespace Yesla.Net
                         YeslaNet.ToAll("blink", m.Arg(0), Mathf.Clamp(side, -1, 1).ToString(CultureInfo.InvariantCulture));
                         return;
                     }
+                case "req.lid":
+                    {
+                        LandVehicle car = OwnedCar(m, out string why);
+                        if (car == null) { Core.Log.Warning("[Remote] lid refused: " + why + "."); return; }
+                        if (m.Arg(2) != "frunk" && m.Arg(2) != "trunk") { Bad(m); return; }
+                        YeslaNet.ToAll("lid", m.Arg(0), m.Arg(2), m.Arg(3) == "1" ? "1" : "0");
+                        return;
+                    }
+                case "req.side":
+                    {
+                        // Anyone who can open the storage may; vanilla decides that, the lid only follows.
+                        if (!int.TryParse(m.Arg(0), out int id)) { Bad(m); return; }
+                        if (Fleet.FindById(id) == null) { Core.Log.Warning("[Remote] storage side for car #" + id + ", which is not here."); return; }
+                        YeslaNet.ToAll("side", m.Arg(0), m.Arg(1) == "front" ? "front" : "rear");
+                        return;
+                    }
                 case "req.park":
                     {
                         LandVehicle car = OwnedCar(m, out string why);
@@ -172,6 +207,14 @@ namespace Yesla.Net
                         Indicators.Set(Fleet.FindById(bid), side);
                         return;
                     }
+                case "lid":
+                    if (!int.TryParse(m.Arg(0), out int lid)) { Core.Log.Warning("[Remote] unreadable lid " + m + "."); return; }
+                    MovingParts.SetLid(lid, m.Arg(1), m.Arg(2) == "1");
+                    return;
+                case "side":
+                    if (!int.TryParse(m.Arg(0), out int sideId)) { Core.Log.Warning("[Remote] unreadable storage side " + m + "."); return; }
+                    MovingParts.SetStorageSide(sideId, m.Arg(1) == "front");
+                    return;
                 case "honk":
                     if (!int.TryParse(m.Arg(0), out int id)) { Core.Log.Warning("[Remote] unreadable honk " + m + "."); return; }
                     Horn.Play(Fleet.FindById(id));

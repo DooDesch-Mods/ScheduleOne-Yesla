@@ -1646,13 +1646,16 @@ namespace Yesla.Driving
                 return;
             }
             ParkTarget next = Find(car, old.Centre, out string none, reachable: true);
+            bool fromHere = next != null;
+            // A spot with no way in from where the car stands now is still one the road AI can bring it round to.
+            if (next == null) next = Find(car, old.Centre, out none);
             if (next == null)
             {
                 Finish(false, Key(what) + " keeps the car out, no other spot (" + none + ")");
                 return;
             }
             car.throttleOverride = 0f;
-            bool close = next.Lot == old.Lot && Flat(next.Centre - car.transform.position).magnitude <= RetargetInPlace;
+            bool close = fromHere && next.Lot == old.Lot && Flat(next.Centre - car.transform.position).magnitude <= RetargetInPlace;
             if (close)
             {
                 Core.Log.Msg("[Park] giving up " + old.Label + ": " + Key(what) + " keeps the car out; trying " + next.Label + " from here.");

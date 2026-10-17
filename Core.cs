@@ -81,6 +81,7 @@ namespace Yesla
             Vehicle.Indicators.Reset();
             Vehicle.Pws.Reset();
             Vehicle.AutoLights.Reset();
+            Vehicle.MovingParts.Reset();
             KeyHint.Reset();
             FirstPerson.Reset();
             Visual.Viz.Reset();
@@ -124,6 +125,7 @@ namespace Yesla
             Autopilot.LateTick();
             Parking.LateTick();
             PathFollower.LateTick();
+            Vehicle.MovingParts.LateTick();
             Visual.Viz.LateTick();
 #if DEBUG
             Debugging.AccelTest.LateTick();

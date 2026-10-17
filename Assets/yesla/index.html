@@ -9,16 +9,18 @@
     <div class="stage">
       <img class="pic hidden" id="car-pic" alt="">
       <div class="views hidden" id="car-views"></div>
+      <button class="lid" id="c-frunk"><div class="ln">Frunk</div><div class="ls" id="c-frunk-s">Open</div></button>
+      <button class="lid right" id="c-trunk"><div class="ln">Trunk</div><div class="ls" id="c-trunk-s">Open</div></button>
     </div>
     <div class="stats">
       <div class="stat"><div class="v" id="s-top">-</div><div class="k">km/h top</div></div>
       <div class="stat"><div class="v" id="s-plate">-</div><div class="k">plate</div></div>
     </div>
     <div class="ctrls">
-      <div class="ctl"><button class="tile" id="c-summon"><img class="ico" id="c-summon-i" src="i-summon.png" alt=""></button><div class="tl" id="c-summon-t">Summon</div></div>
-      <div class="ctl"><button class="tile" id="c-honk"><img class="ico" src="i-honk.png" alt=""></button><div class="tl" id="c-honk-t">Honk</div></div>
-      <div class="ctl"><button class="tile" id="c-lock"><img class="ico" id="c-lock-i" src="i-unlock.png" alt=""></button><div class="tl" id="c-lock-t">Unlocked</div></div>
-      <div class="ctl"><button class="tile" id="c-sentry"><img class="ico" src="i-sentry.png" alt=""></button><div class="tl" id="c-sentry-t">Sentry</div></div>
+      <button class="tile" id="c-summon"><img class="ico" id="c-summon-i" src="i-summon.png" alt=""></button>
+      <button class="tile" id="c-honk"><img class="ico" src="i-honk.png" alt=""></button>
+      <button class="tile" id="c-lock"><img class="ico" id="c-lock-i" src="i-unlock.png" alt=""></button>
+      <button class="tile" id="c-sentry"><img class="ico" src="i-sentry.png" alt=""></button>
     </div>
   </div>
 
@@ -62,8 +64,8 @@
             <div class="dn" id="card-name">Tap the map or search a place</div>
             <div class="dl" id="card-line"></div>
           </div>
-          <button class="btn ghost" id="clear">Clear</button>
-          <button class="btn" id="send">Send to car</button>
+          <button class="btn ghost" id="clear"><img class="ico-s" src="i-clear.png" alt=""><div class="bt">Clear</div></button>
+          <button class="btn" id="send"><img class="ico-s" id="send-i" src="i-send.png" alt=""><div class="bt" id="send-t">Send to car</div></button>
         </div>
         <div class="tag" id="tag"></div>
       </div>
