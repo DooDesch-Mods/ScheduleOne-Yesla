@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Chassis.Api;
 using Il2CppScheduleOne.Persistence;
 using Il2CppScheduleOne.Vehicles;
 using Yesla.Net;
@@ -9,21 +10,22 @@ using Yesla.Net;
 namespace Yesla.Vehicle
 {
     /// <summary>
-    /// Who owns which Yesla, and its lock and Sentry Mode switches.
+    /// The Yesla's own switches: Sentry Mode and the licence plate. Who owns a car and whether it is locked is
+    /// Chassis' record (<see cref="ChassisApi.OwnerOf"/>, <see cref="ChassisApi.IsLocked"/>); a <see cref="Rec"/> carries
+    /// both as read from Chassis, so callers see one record per car.
     ///
-    /// Vanilla only knows "player owned" for the whole save, not which player bought a car, so Yesla keeps its own
-    /// record. The host is the authority: it keys the record by the car's save GUID, writes it next to the save
+    /// The host is the authority: it keys the record by the car's save GUID, writes it next to the save
     /// (<c>Yesla.cars</c> in the save folder) and broadcasts it to every client by the car's network id, because a
-    /// client's GUID for the same car is generated locally and never matches.
-    ///
-    /// A Yesla with no record (bought before Yesla tracked owners) belongs to the host.
+    /// client's GUID for the same car is generated locally and never matches. The file keeps the owner and lock
+    /// columns, so a save opened by a Yesla without Chassis keeps them, and Chassis imports them for cars it has no
+    /// record of yet (<see cref="ChassisApi.ResolveUnknownOwner"/>).
     /// </summary>
     internal static class Fleet
     {
         internal sealed class Rec
         {
-            internal string Owner = string.Empty;   // Player.PlayerCode
-            internal bool Locked;
+            internal string Owner = string.Empty;   // Player.PlayerCode, from Chassis
+            internal bool Locked;                   // from Chassis
             internal bool Sentry;
             internal string Plate = string.Empty;        // the owner's own plate, empty for the factory one
             internal string DefaultPlate = string.Empty; // "YESLA" and three digits from the save GUID
@@ -47,37 +49,47 @@ namespace Yesla.Vehicle
         private static float _nextScan;
         private static string _lastBroadcast = string.Empty;
         private static bool _askedForSync;
-        private static bool _scanned;
 
-        /// <summary>How long a purchase announcement and a new, unclaimed car wait for each other.</summary>
-        private const float ClaimSeconds = 10f;
-        private struct Announcement { internal string Buyer; internal float At; }
-        private static readonly Queue<Announcement> Pending = new Queue<Announcement>();
-        private static readonly Dictionary<string, float> FirstSeen = new Dictionary<string, float>();
-
-        /// <summary>Fires on every peer when the record of any car changed.</summary>
+        /// <summary>Fires on every peer when the record of any car changed, the owner or lock in Chassis included.</summary>
         internal static event Action Changed;
 
         internal static int Revision { get; private set; }
+
+        /// <summary>Hooks into Chassis' owner records; once per process.</summary>
+        internal static void Init()
+        {
+            var earlier = ChassisApi.ResolveUnknownOwner;
+            ChassisApi.ResolveUnknownOwner = lv => Import(lv) ?? earlier?.Invoke(lv);
+            ChassisApi.OwnersChanged += () => { Revision++; Raise(); };
+            Core.Log.Msg("[Fleet] owners and locks come from Chassis; Yesla.cars records are imported for cars Chassis does not know yet.");
+        }
+
+        /// <summary>Host, for Chassis: owner and lock of a Yesla from <c>Yesla.cars</c>, or null.</summary>
+        private static OwnerRecord Import(LandVehicle car)
+        {
+            if (car == null || !Phone.YeslaApp.IsYesla(car)) return null;
+            EnsureLoaded();
+            if (!ByGuid.TryGetValue(car.GUID.ToString(), out Rec r) || r.Owner.Length == 0) return null;
+            Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": owner " + r.Owner + (r.Locked ? ", locked" : string.Empty) + " handed to Chassis from " + FileName + ".");
+            return new OwnerRecord { Owner = r.Owner, Locked = r.Locked };
+        }
 
         internal static Rec For(LandVehicle car)
         {
             if (car == null) return null;
             int id = NetId(car);
-            return id >= 0 && ById.TryGetValue(id, out Rec r) ? r : null;
+            return id >= 0 && ById.TryGetValue(id, out Rec r) ? FromChassis(car, r) : null;
         }
 
-        internal static bool IsMine(LandVehicle car)
-        {
-            Rec r = For(car);
-            string me = MyCode();
-            return r != null && me.Length > 0 && r.Owner == me;
-        }
+        internal static bool IsMine(LandVehicle car) => car != null && ChassisApi.IsMine(car);
 
-        internal static string MyCode()
+        internal static string MyCode() => ChassisApi.LocalPlayerCode ?? string.Empty;
+
+        private static Rec FromChassis(LandVehicle car, Rec r)
         {
-            Player local = Player.Local;
-            return local != null ? local.PlayerCode ?? string.Empty : string.Empty;
+            r.Owner = ChassisApi.OwnerOf(car);
+            r.Locked = ChassisApi.IsLocked(car);
+            return r;
         }
 
         internal static int NetId(LandVehicle car)
@@ -117,38 +129,15 @@ namespace Yesla.Vehicle
 
         // ---- host --------------------------------------------------------------------------------------------------
 
-        /// <summary>Host: record a purchase. The buyer becomes the owner; lock and Sentry start off.</summary>
-        internal static void Claim(LandVehicle car, string owner, string why)
-        {
-            if (!YeslaNet.IsHost) { Core.Log.Warning("[Fleet] claim on a client ignored - the host records owners."); return; }
-            if (car == null || string.IsNullOrEmpty(owner)) { Core.Log.Warning("[Fleet] claim without a car or owner (" + why + ") ignored."); return; }
-            string guid = car.GUID.ToString();
-            ByGuid[guid] = NewRec(guid, owner);
-            Core.Log.Msg("[Fleet] " + car.VehicleName + " " + guid.Substring(0, 6) + " now belongs to " + owner + " (" + why + ").");
-            Save();
-            Broadcast(force: true);
-        }
-
-        /// <summary>Host: a player announced a Yesla purchase; the next new Yesla is theirs.</summary>
-        internal static void Announce(string buyer)
-        {
-            if (string.IsNullOrEmpty(buyer)) { Core.Log.Warning("[Fleet] purchase announcement without a buyer ignored."); return; }
-            Pending.Enqueue(new Announcement { Buyer = buyer, At = Time.unscaledTime });
-            Core.Log.Msg("[Fleet] " + buyer + " is buying a Yesla - the next new one is theirs.");
-            _nextScan = 0f;
-        }
-
-        /// <summary>Host: change a switch on a car. Returns why it was refused, or null.</summary>
-        internal static string Set(LandVehicle car, string requester, bool? locked, bool? sentry)
+        /// <summary>Host: switch Sentry Mode on a car. Returns why it was refused, or null.</summary>
+        internal static string SetSentry(LandVehicle car, string requester, bool on)
         {
             if (!YeslaNet.IsHost) return "only the host changes a car";
-            if (!ByGuid.TryGetValue(car.GUID.ToString(), out Rec r)) return "the car has no owner record";
+            Rec r = HostRec(car);
+            if (r == null) return "the car has no record";
             if (r.Owner != requester) return "not the owner";
-            bool chirp = locked.HasValue && locked.Value != r.Locked;
-            if (locked.HasValue) r.Locked = locked.Value;
-            if (sentry.HasValue) r.Sentry = sentry.Value;
-            if (chirp) YeslaNet.ToAll("chirp", NetId(car).ToString(System.Globalization.CultureInfo.InvariantCulture), r.Locked ? "1" : "0");
-            Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": locked=" + r.Locked + " sentry=" + r.Sentry + " (by " + requester + ").");
+            r.Sentry = on;
+            Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": sentry=" + r.Sentry + " (by " + requester + ").");
             Save();
             Broadcast(force: true);
             return null;
@@ -158,7 +147,8 @@ namespace Yesla.Vehicle
         internal static string SetPlate(LandVehicle car, string requester, string text)
         {
             if (!YeslaNet.IsHost) return "only the host changes a car";
-            if (!ByGuid.TryGetValue(car.GUID.ToString(), out Rec r)) return "the car has no owner record";
+            Rec r = HostRec(car);
+            if (r == null) return "the car has no record";
             if (r.Owner != requester) return "not the owner";
             r.Plate = Vehicle.Plate.Clean(text);
             Core.Log.Msg("[Fleet] " + car.VehicleName + " " + Short(car) + ": plate '" + r.PlateText + "'" + (r.Plate.Length == 0 ? " (factory)" : string.Empty)
@@ -168,9 +158,9 @@ namespace Yesla.Vehicle
             return null;
         }
 
-        /// <summary>Host: the owner record for a car by save GUID, or null.</summary>
+        /// <summary>Host: the record for a car by save GUID, with owner and lock from Chassis, or null.</summary>
         internal static Rec HostRec(LandVehicle car) =>
-            car != null && ByGuid.TryGetValue(car.GUID.ToString(), out Rec r) ? r : null;
+            car != null && ByGuid.TryGetValue(car.GUID.ToString(), out Rec r) ? FromChassis(car, r) : null;
 
         internal static void Tick()
         {
@@ -195,37 +185,31 @@ namespace Yesla.Vehicle
             EnsureLoaded();
             var all = AllVehicles();
             if (all == null) return;
-            string host = MyCode();
-            if (host.Length == 0) return;
-            while (Pending.Count > 0 && now - Pending.Peek().At > ClaimSeconds)
-            {
-                var stale = Pending.Dequeue();
-                Core.Log.Warning("[Fleet] the Yesla purchase announced by " + stale.Buyer + " never showed up as a car - announcement dropped.");
-            }
+            bool dirty = false;
             for (int i = 0; i < all.Count; i++)
             {
                 var v = all[i];
                 if (v == null || !v.IsPlayerOwned || !Phone.YeslaApp.IsYesla(v)) continue;
+                // Chassis decides the owner; a car it has not settled yet (a purchase still on its way) waits.
+                string owner = ChassisApi.OwnerOf(v);
+                if (owner.Length == 0) continue;
                 string guid = v.GUID.ToString();
-                if (ByGuid.ContainsKey(guid)) continue;
-
-                if (Pending.Count > 0)
+                bool locked = ChassisApi.IsLocked(v);
+                if (!ByGuid.TryGetValue(guid, out Rec r))
                 {
-                    Claim(v, Pending.Dequeue().Buyer, "bought at the dealership");
-                    continue;
+                    ByGuid[guid] = r = NewRec(guid, owner);
+                    r.Locked = locked;
+                    Core.Log.Msg("[Fleet] " + v.VehicleName + " " + Short(v) + " gets a Yesla record, owner " + owner + ".");
+                    dirty = true;
                 }
-                // A car that appears after the first scan was just bought; its buyer's announcement may still be on
-                // the way. Cars already there at the first scan came from the save.
-                if (_scanned)
+                else if (r.Owner != owner || r.Locked != locked)
                 {
-                    if (!FirstSeen.TryGetValue(guid, out float seen)) { FirstSeen[guid] = now; continue; }
-                    if (now - seen < ClaimSeconds) continue;
+                    r.Owner = owner;
+                    r.Locked = locked;
+                    dirty = true;
                 }
-                ByGuid[guid] = NewRec(guid, host);
-                Core.Log.Msg("[Fleet] " + v.VehicleName + " " + guid.Substring(0, 6) + " had no owner record - it belongs to the host (" + host + ").");
-                Save();
             }
-            _scanned = true;
+            if (dirty) Save();
             Broadcast(force: false);
         }
 
@@ -240,7 +224,8 @@ namespace Yesla.Vehicle
                 {
                     var v = all[i];
                     if (v == null || !Phone.YeslaApp.IsYesla(v)) continue;
-                    if (!ByGuid.TryGetValue(v.GUID.ToString(), out Rec r)) continue;
+                    Rec r = HostRec(v);
+                    if (r == null) continue;
                     if (sb.Length > 0) sb.Append(';');
                     sb.Append(NetId(v)).Append(',').Append(r.Owner).Append(',').Append(r.Locked ? 1 : 0).Append(',').Append(r.Sentry ? 1 : 0)
                       .Append(',').Append(r.Plate).Append(',').Append(r.DefaultPlate);
@@ -277,6 +262,11 @@ namespace Yesla.Vehicle
             foreach (var kv in next) ById[kv.Key] = kv.Value;
             Revision++;
             Core.Log.Msg("[Fleet] car records: " + (payload.Length > 0 ? payload : "none") + " (I am " + MyCode() + ").");
+            Raise();
+        }
+
+        private static void Raise()
+        {
             try { Changed?.Invoke(); }
             catch (Exception e) { Core.Log.Error("[Fleet] a change listener failed: " + e); }
         }
@@ -334,7 +324,11 @@ namespace Yesla.Vehicle
         {
             var sb = new StringBuilder("fleet me=" + MyCode() + " host=" + YeslaNet.IsHost);
             foreach (var kv in ById)
-                sb.Append(" [#").Append(kv.Key).Append(" owner=").Append(kv.Value.Owner).Append(" locked=").Append(kv.Value.Locked).Append(" sentry=").Append(kv.Value.Sentry).Append(" plate=").Append(kv.Value.PlateText).Append(']');
+            {
+                LandVehicle car = FindById(kv.Key);
+                Rec r = car != null ? FromChassis(car, kv.Value) : kv.Value;
+                sb.Append(" [#").Append(kv.Key).Append(" owner=").Append(r.Owner).Append(" locked=").Append(r.Locked).Append(" sentry=").Append(r.Sentry).Append(" plate=").Append(r.PlateText).Append(']');
+            }
             return sb.ToString();
         }
 
@@ -342,8 +336,8 @@ namespace Yesla.Vehicle
         {
             if (car == null) return "no car";
             Rec r = For(car);
-            return car.VehicleName + " #" + NetId(car) + " owner=" + (r?.Owner ?? "unknown") + " me=" + MyCode()
-                + (r != null ? " locked=" + r.Locked + " sentry=" + r.Sentry + " plate='" + r.PlateText + "'" : string.Empty);
+            return car.VehicleName + " #" + NetId(car) + " owner=" + ChassisApi.OwnerOf(car) + " me=" + MyCode() + " locked=" + ChassisApi.IsLocked(car)
+                + (r != null ? " sentry=" + r.Sentry + " plate='" + r.PlateText + "'" : " (no Yesla record yet)");
         }
 
         internal static void Reset()
@@ -353,9 +347,6 @@ namespace Yesla.Vehicle
             _loadedFrom = null;
             _lastBroadcast = string.Empty;
             _askedForSync = false;
-            _scanned = false;
-            Pending.Clear();
-            FirstSeen.Clear();
             _nextScan = 0f;
         }
     }

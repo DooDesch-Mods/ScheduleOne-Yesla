@@ -187,6 +187,18 @@
     </Reference>
   </ItemGroup>
 
+  <!-- Chassis seats the driver, turns the steering wheel and runs horn, lock, owners, indicators, lids, wipers and
+       automatic headlights. A sibling checkout builds it; otherwise the DLL from the shared lib folder. -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)../Chassis/Chassis.csproj')">
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../Chassis/Chassis.csproj" Private="false" />
+  </ItemGroup>
+  <ItemGroup Condition="!Exists('$(MSBuildThisFileDirectory)../Chassis/Chassis.csproj')">
+    <Reference Include="Chassis">
+      <HintPath>$(WorkspaceLibPath)/$(Backend)/chassis/Chassis.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="Newtonsoft.Json">
       <HintPath>$(MelonLoaderPath)/Newtonsoft.Json.dll</HintPath>

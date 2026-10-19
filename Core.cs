@@ -5,6 +5,7 @@ using Yesla.Driving;
 
 [assembly: MelonInfo(typeof(Yesla.Core), "Yesla", DooDesch.ModVersion.Current, "DooDesch", "https://github.com/DooDesch-Mods/ScheduleOne-Yesla")]
 [assembly: MelonGame("TVGS", "Schedule I")]
+[assembly: MelonAdditionalDependencies("Chassis")]
 
 namespace Yesla
 {
@@ -28,6 +29,7 @@ namespace Yesla
             Preferences.Initialize();
             Net.YeslaNet.Apply(HarmonyInstance);
             Net.Remote.Init();
+            Vehicle.Fleet.Init();
             Phone.YeslaApp.Register();
 
             // No PatchAll here: MelonLoader applies the [HarmonyPatch] classes of a MelonMod itself, and a second
@@ -59,6 +61,7 @@ namespace Yesla
                 return;
             }
             Vehicle.YeslaVehicleType.Register(NetworkSingleton<Il2CppScheduleOne.Vehicles.VehicleManager>.Instance);
+            Vehicle.YeslaChassis.Register(Vehicle.YeslaVehicleType.Prefab);
         }
 
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
@@ -80,10 +83,8 @@ namespace Yesla
             DestinationMarker.Reset();
             Vehicle.Indicators.Reset();
             Vehicle.Pws.Reset();
-            Vehicle.AutoLights.Reset();
             Vehicle.MovingParts.Reset();
             KeyHint.Reset();
-            FirstPerson.Reset();
             Visual.Viz.Reset();
             Phone.YeslaApp.Reset();
         }
@@ -104,9 +105,7 @@ namespace Yesla
             Vehicle.Plate.Tick();
             Vehicle.Indicators.Tick();
             Vehicle.Pws.Tick();
-            if (Net.YeslaNet.IsHost) Vehicle.AutoLights.Tick();
             DestinationMarker.Tick();
-            FirstPerson.Tick();
             Visual.Viz.Tick();
             KeyHint.Tick();
             Phone.YeslaApp.Tick();
