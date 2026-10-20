@@ -62,6 +62,7 @@ namespace Yesla
             }
             Vehicle.YeslaVehicleType.Register(NetworkSingleton<Il2CppScheduleOne.Vehicles.VehicleManager>.Instance);
             Vehicle.YeslaChassis.Register(Vehicle.YeslaVehicleType.Prefab);
+            Driving.KeyHint.Register();
         }
 
         public override void OnSceneWasUnloaded(int buildIndex, string sceneName)
@@ -84,7 +85,6 @@ namespace Yesla
             Vehicle.Indicators.Reset();
             Vehicle.Pws.Reset();
             Vehicle.MovingParts.Reset();
-            KeyHint.Reset();
             Visual.Viz.Reset();
             Phone.YeslaApp.Reset();
         }
@@ -107,7 +107,6 @@ namespace Yesla
             Vehicle.Pws.Tick();
             DestinationMarker.Tick();
             Visual.Viz.Tick();
-            KeyHint.Tick();
             Phone.YeslaApp.Tick();
 #if DEBUG
             Debugging.JitterProbe.Own.Stop();
