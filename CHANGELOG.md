@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0] - 2026-10-21
+
+### Changed
+- Needs Chassis 1.4.0: you sit visibly at the wheel, and horn, lock, indicators, lids and wipers come from it. Your
+  cars and owners carry over.
+- First person is on `V` now (was `C`).
+- The key hints show Assisted Driving next to the Chassis keys.
+
 ## [1.0.0] - 2026-10-17
 
 ### Added
