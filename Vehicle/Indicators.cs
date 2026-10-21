@@ -10,17 +10,11 @@ namespace Yesla.Vehicle
 {
     /// <summary>
     /// The Yesla's turn signals while Assisted Driving drives: on before a turn on the route, towards the spot while it
-    /// parks. Vanilla cars have no indicators, so the lamps are the model's own <c>Light_IndicatorL</c> and
-    /// <c>Light_IndicatorR</c> parts, switched between their own material and an amber glowing copy of it.
-    ///
-    /// The peer that drives decides the side; the host passes it on to every player, and each player flashes the lamps
-    /// on its own clock.
+    /// parks. The peer that drives decides the side and hands it to Chassis, which passes it on through the host and
+    /// flashes the model's <c>Light_IndicatorL</c> and <c>Light_IndicatorR</c> lamps on every player.
     /// </summary>
     internal static class Indicators
     {
-        private static readonly Color Amber = new Color(1f, 0.42f, 0f);
-        /// <summary>One flash on and off, in seconds: about 90 flashes a minute.</summary>
-        private const float Period = 0.66f;
         /// <summary>A bend of this many degrees over 15 m is a turn; the road's sweeping curves stay below it.</summary>
         private const float TurnAngle = 40f;
         private const float Sample = 5f;
@@ -37,19 +31,8 @@ namespace Yesla.Vehicle
         /// S-bend into a lot made it flip every check.</summary>
         private const float FlipAfter = 1.2f;
 
-        private sealed class Lamps
-        {
-            internal LandVehicle Car;
-            internal readonly List<MeshRenderer> Left = new List<MeshRenderer>(), Right = new List<MeshRenderer>();
-            internal Material LeftOff, RightOff, LeftOn, RightOn;
-            internal int Side;
-            internal bool Lit;
-        }
-
-        private static readonly Dictionary<IntPtr, Lamps> Cars = new Dictionary<IntPtr, Lamps>();
         private static readonly List<Vector3> Pts = new List<Vector3>();
         private static readonly List<Vector3> Samples = new List<Vector3>();
-        private static readonly List<IntPtr> Gone = new List<IntPtr>();
 
         private static float _nextCheck, _lastSeen;
         private static int _lastSide;
@@ -57,7 +40,7 @@ namespace Yesla.Vehicle
         private static int _sent;
         private static float _flipSince = -1f;
 
-        /// <summary>Decides the local driver's signal, sends a change, and flashes every car's lamps.</summary>
+        /// <summary>Decides the local driver's signal and sends a change.</summary>
         internal static void Tick()
         {
             float now = Time.time;
@@ -85,7 +68,6 @@ namespace Yesla.Vehicle
                 }
                 _sentCar = car;
             }
-            Flash(now);
         }
 
         /// <summary>The car this player's Assisted Driving moves right now, or null.</summary>
@@ -164,78 +146,10 @@ namespace Yesla.Vehicle
             return 0;
         }
 
-        /// <summary>Sets a car's signal; from the host's broadcast on every player.</summary>
-        internal static void Set(LandVehicle car, int side)
-        {
-            if (car == null) { Core.Log.Warning("[Indicators] signal for a car that is not here - nothing to light."); return; }
-            Lamps l = For(car);
-            if (l == null) return;
-            if (l.Side == side) return;
-            Core.Log.Msg("[Indicators] " + car.VehicleName + " signals " + (side < 0 ? "left" : side > 0 ? "right" : "off") + ".");
-            l.Side = side;
-            Show(l, false);
-        }
-
-        private static void Flash(float now)
-        {
-            if (Cars.Count == 0) return;
-            bool lit = now % Period < Period * 0.5f;
-            Gone.Clear();
-            foreach (var kv in Cars)
-            {
-                Lamps l = kv.Value;
-                if (l.Car == null || l.Car.gameObject == null) { Gone.Add(kv.Key); continue; }
-                bool want = l.Side != 0 && lit;
-                if (want != l.Lit) Show(l, want);
-            }
-            foreach (IntPtr p in Gone) Cars.Remove(p);
-        }
-
-        private static void Show(Lamps l, bool lit)
-        {
-            l.Lit = lit;
-            Paint(l.Left, lit && l.Side < 0 ? l.LeftOn : l.LeftOff);
-            Paint(l.Right, lit && l.Side > 0 ? l.RightOn : l.RightOff);
-        }
-
-        private static void Paint(List<MeshRenderer> lamps, Material m)
-        {
-            if (m == null) return;
-            foreach (MeshRenderer r in lamps) if (r != null) r.sharedMaterial = m;
-        }
-
-        /// <summary>The car's indicator lamps, found once by their part names.</summary>
-        private static Lamps For(LandVehicle car)
-        {
-            if (Cars.TryGetValue(car.Pointer, out Lamps l)) return l;
-            l = new Lamps { Car = car };
-            foreach (MeshRenderer r in car.GetComponentsInChildren<MeshRenderer>(true))
-            {
-                string name = r.gameObject.name;
-                if (GlbModel.InGroup(name, "Light_IndicatorL")) l.Left.Add(r);
-                else if (GlbModel.InGroup(name, "Light_IndicatorR")) l.Right.Add(r);
-            }
-            if (l.Left.Count == 0 && l.Right.Count == 0)
-            {
-                Core.Log.Warning("[Indicators] " + car.VehicleName + " has no indicator lamps - its signal stays dark.");
-                Cars[car.Pointer] = l;
-                return l;
-            }
-            l.LeftOff = l.Left.Count > 0 ? l.Left[0].sharedMaterial : null;
-            l.RightOff = l.Right.Count > 0 ? l.Right[0].sharedMaterial : null;
-            if (l.LeftOff != null) l.LeftOn = GlbModel.Emissive(l.LeftOff, Amber, "Yesla_Light_IndicatorL_On");
-            if (l.RightOff != null) l.RightOn = GlbModel.Emissive(l.RightOff, Amber, "Yesla_Light_IndicatorR_On");
-            Core.Log.Msg("[Indicators] " + car.VehicleName + ": " + l.Left.Count.ToString(CultureInfo.InvariantCulture) + " left and "
-                         + l.Right.Count.ToString(CultureInfo.InvariantCulture) + " right lamp part(s).");
-            Cars[car.Pointer] = l;
-            return l;
-        }
-
         private static Vector3 Flat(Vector3 v) { v.y = 0f; return v; }
 
         internal static void Reset()
         {
-            Cars.Clear();
             _sentCar = null;
             _sent = 0;
             _lastSide = 0;

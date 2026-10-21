@@ -52,13 +52,14 @@ namespace Yesla.Visual
             {
                 if (!VizScene.Ensure(_car)) { _failed = true; Core.Log.Error("[Viz] the visualisation could not be built and stays off until the world reloads."); return; }
                 bool hidden = UiBlocks();
-                VizMode screen = hidden ? VizMode.Off : Mode == VizMode.Hud && FirstPerson.Active ? VizMode.Off : Mode;
-                if (FirstPerson.Active || screen != VizMode.Off) VizScene.Tick(_car);
+                bool firstPerson = Chassis.Api.ChassisApi.FirstPersonActive;
+                VizMode screen = hidden ? VizMode.Off : Mode == VizMode.Hud && firstPerson ? VizMode.Off : Mode;
+                if (firstPerson || screen != VizMode.Off) VizScene.Tick(_car);
                 VizHud.Show(screen);
                 CenterScreen.Show(_car);
                 Cabin.Show(_car);
-                CabinLight.Show(_car, FirstPerson.Active);
-                CabinGlass.Show(_car, FirstPerson.Active);
+                CabinLight.Show(_car, firstPerson);
+                CabinGlass.Show(_car, firstPerson);
             }
             catch (Exception e)
             {

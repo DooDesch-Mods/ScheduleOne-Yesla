@@ -71,8 +71,6 @@ namespace Yesla.Debugging
                         Say("steer <x>          - set the steering axis like a key press (0 releases it)");
                         Say("throttle <y>       - set the throttle axis the same way (-1 reverses, 0 releases it)");
                         Say("revlight on|off [i range angle tilt] - switch and tune the reverse ground light while standing");
-                        Say("fp [on|off]        - first-person view in a Yesla (same as the view key)");
-                        Say("fp eye <x> <y> <z> - eye position in the seat's local space");
                         Say("viz [hud|full|off|lights] - driving visualisation view (same as the visualisation key); lights lists nearby traffic lights");
                         Say("viz save [path]    - write the current visualisation picture to a PNG");
                         Say("vizprobe           - road links, layers, shaders and cameras the visualisation uses");
@@ -201,7 +199,7 @@ namespace Yesla.Debugging
                             if (d < bestDist) { bestDist = d; best = v; }
                         }
                         if (best == null) { Say("claim: no Yesla in the world"); break; }
-                        Vehicle.Fleet.Claim(best, code, "console claim");
+                        if (!Chassis.Api.ChassisApi.SetOwner(best, code)) { Say("claim: refused, see the [Fleet] line in the log (host only)"); break; }
                         Say("claim: " + Vehicle.Fleet.Describe(best));
                         break;
                     }
@@ -640,23 +638,6 @@ namespace Yesla.Debugging
                         Say("vizprobe done - see the [VizProbe] lines in the log");
                         break;
 
-                    case "fp":
-                    {
-                        // 'fp' toggles like the view key, 'fp on|off', 'fp eye <x> <y> <z>' moves the eye in seat space.
-                        string arg = parts.Length > 2 ? parts[2].ToLowerInvariant() : "";
-                        if (arg == "eye" && parts.Length > 5
-                            && float.TryParse(parts[3], NumberStyles.Float, CultureInfo.InvariantCulture, out float ex)
-                            && float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out float ey)
-                            && float.TryParse(parts[5], NumberStyles.Float, CultureInfo.InvariantCulture, out float ez))
-                            FirstPerson.EyeOffset = new Vector3(ex, ey, ez);
-                        else if (arg == "on") FirstPerson.Set(true, "console");
-                        else if (arg == "off") FirstPerson.Set(false, "console");
-                        else if (arg == "") FirstPerson.Set(!FirstPerson.Active, "console");
-                        else { Say("usage: yesla fp [on|off] | yesla fp eye <x> <y> <z>"); break; }
-                        Say(FirstPerson.Describe());
-                        break;
-                    }
-
                     case "stop":
                         Autopilot.Disengage("console stop");
                         Say(Autopilot.Describe());
@@ -679,8 +660,7 @@ namespace Yesla.Debugging
                         float yaw = 0f;
                         if (parts.Length > 4) float.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out yaw);
                         Quaternion rot = Quaternion.LookRotation(fwd) * Quaternion.Euler(0f, yaw, 0f);
-                        // A Yesla spawned here belongs to whoever spawned it, as if they had bought it.
-                        if (code == Vehicle.YeslaVehicleType.Code) Net.YeslaNet.ToHost("req.bought", Vehicle.Fleet.MyCode());
+                        // A Yesla spawned here belongs to the host; 'yesla claim' hands it to someone else.
                         NetworkSingleton<VehicleManager>.Instance.SpawnVehicle(code, pos, rot, true);
                         Say("asked the server for a '" + code + "' at " + pos.ToString("F1"));
                         break;
@@ -799,15 +779,6 @@ namespace Yesla.Debugging
                         if (pick == null) { Say("storage: no " + end + " access point on " + car.VehicleName); break; }
                         pick.StartInteract();
                         Say("storage: opened at " + pick.gameObject.name + ", prompt '" + pick.message + "'");
-                        break;
-                    }
-
-                    case "rain":
-                    {
-                        // rain on|off|auto           - forces the wipers' rain reading; auto reads the weather again
-                        string mode = parts.Length > 2 ? parts[2] : "auto";
-                        Vehicle.MovingParts.RainOverride = mode == "on" ? true : mode == "off" ? false : (bool?)null;
-                        Say("rain: " + (Vehicle.MovingParts.RainOverride.HasValue ? (Vehicle.MovingParts.RainOverride.Value ? "forced on" : "forced off") : "from the weather"));
                         break;
                     }
 

@@ -5,7 +5,8 @@
   "description": "Buy the Yesla Model 3 electric sedan at the dealership, send it a destination from your phone and let Yesla Assisted Driving take you there.",
   "dependencies": [
     "LavaGang-MelonLoader-0.7.3",
-    "ifBars-S1API_Forked-3.2.1"
+    "ifBars-S1API_Forked-3.2.1",
+    "DooDesch-Chassis-1.4.0"
   ],
   "contributors": [
     "DooDesch"

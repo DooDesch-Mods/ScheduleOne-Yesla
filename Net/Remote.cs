@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using Chassis.Api;
 using Il2CppScheduleOne.Vehicles;
 using Yesla.Driving;
 using Yesla.Vehicle;
@@ -8,7 +9,8 @@ namespace Yesla.Net
 {
     /// <summary>
     /// What the phone buttons do across the network: requests a player sends to the host, and the state the host
-    /// sends back to everyone. The host checks ownership on every request; a client only ever asks.
+    /// sends back to everyone. The host checks ownership on every request; a client only ever asks. Horn, lock, lids
+    /// and indicators go through Chassis, which carries them to the host and back the same way.
     /// </summary>
     internal static class Remote
     {
@@ -24,16 +26,15 @@ namespace Yesla.Net
         {
             if (car == null) return "No Yesla.";
             if (!Fleet.IsMine(car)) return "This Yesla is not yours.";
-            YeslaNet.ToHost("req.honk", Id(car), Fleet.MyCode());
+            ChassisApi.Honk(car, flash: true);
             return null;
         }
 
         internal static string ToggleLock(LandVehicle car)
         {
             if (car == null) return "No Yesla.";
-            Fleet.Rec r = Fleet.For(car);
-            if (r == null || !Fleet.IsMine(car)) return "This Yesla is not yours.";
-            YeslaNet.ToHost("req.lock", Id(car), Fleet.MyCode(), r.Locked ? "0" : "1");
+            if (!Fleet.IsMine(car)) return "This Yesla is not yours.";
+            ChassisApi.SetLocked(car, !ChassisApi.IsLocked(car));
             return null;
         }
 
@@ -61,7 +62,7 @@ namespace Yesla.Net
             if (car == null) return "No Yesla.";
             if (which != "frunk" && which != "trunk") return "Unknown lid.";
             if (!Fleet.IsMine(car)) return "This Yesla is not yours.";
-            YeslaNet.ToHost("req.lid", Id(car), Fleet.MyCode(), which, MovingParts.LidOpen(car, which) ? "0" : "1");
+            ChassisApi.SetPart(car, which, !ChassisApi.PartOpen(car, which));
             return null;
         }
 
@@ -69,9 +70,7 @@ namespace Yesla.Net
         internal static void StorageSide(LandVehicle car, bool front)
         {
             if (car == null) return;
-            // Locally at once, so the right lid moves before the host answers; the host tells everyone else.
-            MovingParts.SetStorageSide(Fleet.NetId(car), front);
-            YeslaNet.ToHost("req.side", Id(car), front ? "front" : "rear");
+            ChassisApi.SetStorageEnd(car, front);
         }
 
         /// <summary>Tell the host this car now stands in a lot spot, so no NPC car is parked into it.</summary>
@@ -85,7 +84,7 @@ namespace Yesla.Net
         internal static void Blink(LandVehicle car, int side)
         {
             if (car == null) return;
-            YeslaNet.ToHost("req.blink", Id(car), side.ToString(CultureInfo.InvariantCulture));
+            ChassisApi.SetIndicator(car, side);
         }
 
         private static string Id(LandVehicle car) => Fleet.NetId(car).ToString(CultureInfo.InvariantCulture);
@@ -100,9 +99,6 @@ namespace Yesla.Net
                 case "req.sync":
                     Fleet.Broadcast(force: true);
                     return;
-                case "req.bought":
-                    Fleet.Announce(m.Arg(0));
-                    return;
                 case "req.summon":
                     if (!int.TryParse(m.Arg(0), out int sid) || !Summon.TryVec(m.Arg(2), out Vector3 at)) { Bad(m); return; }
                     Summon.HostStart(sid, m.Arg(1), at, m.Arg(3));
@@ -115,21 +111,11 @@ namespace Yesla.Net
                     if (!int.TryParse(m.Arg(0), out int uid)) { Bad(m); return; }
                     Summon.HostCancel(uid, m.Arg(1));
                     return;
-                case "req.honk":
-                    {
-                        LandVehicle car = OwnedCar(m, out string why);
-                        if (car == null) { Core.Log.Warning("[Remote] honk refused: " + why + "."); return; }
-                        YeslaNet.ToAll("honk", m.Arg(0));
-                        Horn.Flash(car);
-                        return;
-                    }
-                case "req.lock":
                 case "req.sentry":
                     {
                         LandVehicle car = OwnedCar(m, out string why);
                         if (car == null) { Core.Log.Warning("[Remote] " + m.Op + " refused: " + why + "."); return; }
-                        bool on = m.Arg(2) == "1";
-                        string refused = m.Op == "req.lock" ? Fleet.Set(car, m.Arg(1), on, null) : Fleet.Set(car, m.Arg(1), null, on);
+                        string refused = Fleet.SetSentry(car, m.Arg(1), m.Arg(2) == "1");
                         if (refused != null) Core.Log.Warning("[Remote] " + m.Op + " refused: " + refused + ".");
                         return;
                     }
@@ -139,30 +125,6 @@ namespace Yesla.Net
                         if (car == null) { Core.Log.Warning("[Remote] plate refused: " + why + "."); return; }
                         string refused = Fleet.SetPlate(car, m.Arg(1), m.Arg(2));
                         if (refused != null) Core.Log.Warning("[Remote] plate refused: " + refused + ".");
-                        return;
-                    }
-                case "req.blink":
-                    {
-                        // Any player may drive any Yesla with Assisted Driving, so the signal needs no owner.
-                        if (!int.TryParse(m.Arg(0), out int id) || !int.TryParse(m.Arg(1), out int side)) { Bad(m); return; }
-                        if (Fleet.FindById(id) == null) { Core.Log.Warning("[Remote] blink for car #" + id + ", which is not here."); return; }
-                        YeslaNet.ToAll("blink", m.Arg(0), Mathf.Clamp(side, -1, 1).ToString(CultureInfo.InvariantCulture));
-                        return;
-                    }
-                case "req.lid":
-                    {
-                        LandVehicle car = OwnedCar(m, out string why);
-                        if (car == null) { Core.Log.Warning("[Remote] lid refused: " + why + "."); return; }
-                        if (m.Arg(2) != "frunk" && m.Arg(2) != "trunk") { Bad(m); return; }
-                        YeslaNet.ToAll("lid", m.Arg(0), m.Arg(2), m.Arg(3) == "1" ? "1" : "0");
-                        return;
-                    }
-                case "req.side":
-                    {
-                        // Anyone who can open the storage may; vanilla decides that, the lid only follows.
-                        if (!int.TryParse(m.Arg(0), out int id)) { Bad(m); return; }
-                        if (Fleet.FindById(id) == null) { Core.Log.Warning("[Remote] storage side for car #" + id + ", which is not here."); return; }
-                        YeslaNet.ToAll("side", m.Arg(0), m.Arg(1) == "front" ? "front" : "rear");
                         return;
                     }
                 case "req.park":
@@ -184,8 +146,8 @@ namespace Yesla.Net
             if (!int.TryParse(m.Arg(0), out int id)) { why = "unreadable car id '" + m.Arg(0) + "'"; return null; }
             LandVehicle car = Fleet.FindById(id);
             if (car == null) { why = "no car #" + id; return null; }
-            Fleet.Rec rec = Fleet.HostRec(car);
-            if (rec == null || rec.Owner != m.Arg(1)) { why = m.Arg(1) + " does not own #" + id + " (owner " + (rec?.Owner ?? "unknown") + ")"; return null; }
+            string owner = ChassisApi.OwnerOf(car);
+            if (owner != m.Arg(1)) { why = m.Arg(1) + " does not own #" + id + " (owner " + (owner.Length > 0 ? owner : "unknown") + ")"; return null; }
             why = null;
             return car;
         }
@@ -201,28 +163,6 @@ namespace Yesla.Net
                 case "cars": Fleet.ApplyState(m.Arg(0)); return;
                 case "summon": Summon.ApplyState(m.Arg(0), m.Arg(1), m.Arg(2)); return;
                 case "sentry": Sentry.ApplyState(m.Arg(0), m.Arg(1), m.Arg(2)); return;
-                case "blink":
-                    {
-                        if (!int.TryParse(m.Arg(0), out int bid) || !int.TryParse(m.Arg(1), out int side)) { Core.Log.Warning("[Remote] unreadable blink " + m + "."); return; }
-                        Indicators.Set(Fleet.FindById(bid), side);
-                        return;
-                    }
-                case "lid":
-                    if (!int.TryParse(m.Arg(0), out int lid)) { Core.Log.Warning("[Remote] unreadable lid " + m + "."); return; }
-                    MovingParts.SetLid(lid, m.Arg(1), m.Arg(2) == "1");
-                    return;
-                case "side":
-                    if (!int.TryParse(m.Arg(0), out int sideId)) { Core.Log.Warning("[Remote] unreadable storage side " + m + "."); return; }
-                    MovingParts.SetStorageSide(sideId, m.Arg(1) == "front");
-                    return;
-                case "honk":
-                    if (!int.TryParse(m.Arg(0), out int id)) { Core.Log.Warning("[Remote] unreadable honk " + m + "."); return; }
-                    Horn.Play(Fleet.FindById(id));
-                    return;
-                case "chirp":
-                    if (!int.TryParse(m.Arg(0), out int cid)) { Core.Log.Warning("[Remote] unreadable chirp " + m + "."); return; }
-                    Horn.Chirp(Fleet.FindById(cid), m.Arg(1) == "1");
-                    return;
                 default:
                     Core.Log.Warning("[Remote] unknown state " + m + " - is every player on the same Yesla version?");
                     return;
