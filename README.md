@@ -6,6 +6,7 @@
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
+[![Polyfill](https://polyfill.doomods.com/badge/yesla.svg)](https://polyfill.doomods.com/mod/yesla)
 
 [![MLVScan Yesla.dll](https://mlvscan.com/attestations/att_jlftEJiWTrsW0p1EuqnAYy4m/badge.svg)](https://mlvscan.com/attestations/att_jlftEJiWTrsW0p1EuqnAYy4m)
 
