@@ -2,7 +2,7 @@
 
 > 🛟 **Need help or found a bug?** Get support at [support.doodesch.de/yesla](https://support.doodesch.de/yesla).
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
 ![Status](https://img.shields.io/badge/status-beta-yellow)

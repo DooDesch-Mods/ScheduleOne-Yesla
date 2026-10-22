@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.1] - 2026-10-22
+
+### Changed
+- Needs Chassis 1.6.0.
+
+### Fixed
+- Heads no longer poke through the roof; everyone in the car leans back a little.
+- The body has smooth highlights and clean edges, and the tyres read as rubber instead of bare rims.
+
 ## [1.1.0] - 2026-10-21
 
 ### Changed
