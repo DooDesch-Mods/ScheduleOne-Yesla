@@ -434,7 +434,7 @@ jobs:
           deps: |
             LavaGang-MelonLoader-0.7.3
             ifBars-S1API_Forked-3.2.1
-            DooDesch-Chassis-1.4.0
+            DooDesch-Chassis-1.6.0
           categories: |
             Mods
 

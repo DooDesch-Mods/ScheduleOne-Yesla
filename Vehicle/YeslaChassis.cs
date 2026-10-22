@@ -20,9 +20,18 @@ namespace Yesla.Vehicle
 
         /// <summary>
         /// Hips against the donor's seat transforms, which sit at the Hounddog's origin height, near the steering wheel.
-        /// The Yesla is low for the game's large heads: this low, the hair stays under the roof.
+        /// The Yesla is low for the game's large heads, so the body also leans back (<see cref="ReclineDegrees"/>).
         /// </summary>
         private const float HipHeight = -0.59f;
+
+        /// <summary>
+        /// The whole body leans back this far about the hips, so the game's large heads stay under the roof (1.34 m in
+        /// model space above the front seats); hands, feet and eyes keep their fitted points.
+        /// </summary>
+        private const float ReclineDegrees = 15f;
+
+        /// <summary>The reclined body also sits this much below the fitted root.</summary>
+        private const float SinkBelowFit = 0.041f;
 
         /// <summary>The first-person eyes sit this much above the body's own, so the view clears the steering wheel; the own head is hidden there.</summary>
         private const float EyeLift = 0.115f;
@@ -70,6 +79,8 @@ namespace Yesla.Vehicle
                     bool driver = seats[i].isDriverSeat;
                     SeatProfile seat = ChassisApi.FitSeat(prefab, i, frame, driver ? steering : null, HipHeight);
                     seat.Eyes += Vector3.up * EyeLift;
+                    seat.Root += Vector3.down * SinkBelowFit;
+                    seat.Recline = ReclineDegrees;
                     Vector3 feet = seat.Feet.Position;
                     feet.y = Mathf.Max(feet.y, FloorY);
                     seat.Feet.Position = feet;
