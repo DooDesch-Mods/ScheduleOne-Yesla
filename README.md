@@ -100,7 +100,7 @@ code. Sell or leave the car before you remove the mod.
 
 - [MelonLoader](https://melonwiki.xyz/) 0.7.3 or newer
 - [S1API](https://thunderstore.io/c/schedule-i/p/ifBars/S1API_Forked/) 3.2.1 or newer
-- [Chassis](https://thunderstore.io/c/schedule-i/p/DooDesch/Chassis/) 1.4.0 or newer
+- [Chassis](https://thunderstore.io/c/schedule-i/p/DooDesch/Chassis/) 1.6.0 or newer
 - [Sideload](https://thunderstore.io/c/schedule-i/p/DooDesch/Sideload/) 1.33.6 or newer for the phone app
   (optional - without it everything but the app works)
 
