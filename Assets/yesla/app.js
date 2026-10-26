@@ -9,6 +9,7 @@ var ZOOM_MIN = 0.4;
 var ZOOM_MAX = 2.5;
 var ZOOM_START = 1.2;
 var WHEEL_STEP = 0.2;
+var VANILLA_METRES = 409.1; // the vanilla map picture's width; the zoom values above are set for it
 var REACH = 10;          // how close a tap has to land to a place marker, in screen px
 var BLUR_GRACE = 200;    // ms the result list stays after the field loses focus, so a click on a result lands
 
@@ -41,6 +42,7 @@ var full = false;
 var plateDraft = null;   // what the player typed into the plate field, null while untouched
 var shownPicture = '';
 var viewsKey = '', viewEls = [], shownView = -1;
+var sheetsKey = '';
 
 var tx = 0, ty = 0, zoom = ZOOM_START;
 
@@ -187,6 +189,10 @@ function flash(text) {
   setClass(tagEl, text ? 'tag on' : 'tag');
 }
 
+// A map that a map expansion widened shows more metres in the same picture, so the zoom grows with it and a
+// street keeps the size it has on the vanilla map. Zooming out still reaches the whole picture.
+function scale() { return state.mapMetres > VANILLA_METRES ? state.mapMetres / VANILLA_METRES : 1; }
+
 // ---- the map ---------------------------------------------------------------------------------------------------
 
 function view() {
@@ -205,7 +211,7 @@ function centreOn(x, y) {
 function apply() {
   var v = view();
   if (zoom < ZOOM_MIN) zoom = ZOOM_MIN;
-  if (zoom > ZOOM_MAX) zoom = ZOOM_MAX;
+  if (zoom > ZOOM_MAX * scale()) zoom = ZOOM_MAX * scale();
   var span = WORLD * zoom;
   tx = Math.min(0, Math.max(v.w - span, tx));
   ty = Math.min(0, Math.max(v.h - span, ty));
@@ -219,7 +225,7 @@ function fitTo(a, b) {
   var v = view();
   var w = Math.max(40, v.w - 2 * FIT_SIDE), h = Math.max(40, v.h - FIT_TOP - FIT_BOTTOM);
   var dx = Math.abs(a.x - b.x) * WORLD, dy = Math.abs(a.y - b.y) * WORLD;
-  zoom = Math.min(ZOOM_MAX, w / Math.max(dx, 1), h / Math.max(dy, 1));
+  zoom = Math.min(ZOOM_MAX * scale(), w / Math.max(dx, 1), h / Math.max(dy, 1));
   var cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
   tx = v.w / 2 - cx * WORLD * zoom;
   ty = FIT_TOP + h / 2 - cy * WORLD * zoom;
@@ -228,7 +234,7 @@ function fitTo(a, b) {
 
 function zoomAt(next, px, py) {
   if (next < ZOOM_MIN) next = ZOOM_MIN;
-  if (next > ZOOM_MAX) next = ZOOM_MAX;
+  if (next > ZOOM_MAX * scale()) next = ZOOM_MAX * scale();
   if (next === zoom) return;
   var wx = (px - tx) / (WORLD * zoom);
   var wy = (py - ty) / (WORLD * zoom);
@@ -745,7 +751,30 @@ function resetPlate() {
 
 // ---- wiring ----------------------------------------------------------------------------------------------------
 
+// The pictures the map app lays over its background, a map expansion's sheets at their own resolution, so the map
+// is as sharp as in the map app. Rebuilt only when the mod publishes them again.
+function renderSheets() {
+  var list = state.sheets || [];
+  var key = state.image + '|' + list.map(function (s) { return s.src + '@' + s.x + ',' + s.y + ',' + s.w + ',' + s.rot; }).join(';');
+  if (key === sheetsKey) return;
+  sheetsKey = key;
+  var box = $('sheets');
+  box.replaceChildren();
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var w = s.w * WORLD, h = s.h * WORLD;
+    var img = document.createElement('img');
+    img.className = 'sheet';
+    img.setAttribute('src', 's1://' + s.src);
+    img.setAttribute('style', 'left: ' + (s.x * WORLD - w / 2).toFixed(1) + 'px; top: ' + (s.y * WORLD - h / 2).toFixed(1) + 'px; width: ' +
+      w.toFixed(1) + 'px; height: ' + h.toFixed(1) + 'px; transform: rotate(' + Math.round(s.rot) + 'deg);');
+    box.appendChild(img);
+  }
+  s1.log('map sheets shown: ' + list.length);
+}
+
 function renderAll() {
+  renderSheets();
   renderRoute();
   renderMarks();
   renderCar();
@@ -843,7 +872,7 @@ viewportEl.addEventListener('wheel', function (e) {
   var p = inView(e);
   var px = p ? p.x : v.w / 2;
   var py = p ? p.y : v.h / 2;
-  zoomAt(zoom + (e.wheelDelta > 0 ? -WHEEL_STEP : WHEEL_STEP), px, py);
+  zoomAt(zoom + (e.wheelDelta > 0 ? -WHEEL_STEP : WHEEL_STEP) * scale(), px, py);
 });
 
 // Back steps out one level at a time: the result list, full screen, an unsent selection, then the app.
@@ -871,4 +900,4 @@ renderSpots();
 renderTabs();
 renderAll();
 var start = state.car || state.player;
-if (start) { zoom = ZOOM_START; centreOn(start.x, start.y); } else apply();
+if (start) { zoom = ZOOM_START * scale(); centreOn(start.x, start.y); } else apply();

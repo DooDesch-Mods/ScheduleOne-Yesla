@@ -121,6 +121,8 @@ body {
 .nomap { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; background: #1b1d21; display: none; }
 .nomap.on { display: flex; }
 .layer { position: absolute; left: 0; top: 0; width: 1250.8px; height: 1250.8px; }
+/* A map sheet at its own resolution over the background picture; its box comes from the state. */
+.sheet { position: absolute; transform-origin: 50% 50%; }
 
 /* One route piece: 1px long and stretched by its transform, so moving the line repaints instead of laying out. */
 .rp { position: absolute; left: 0; top: 0; width: 1px; height: 3px; background: #2c7dfa; transform-origin: 0 50%; }

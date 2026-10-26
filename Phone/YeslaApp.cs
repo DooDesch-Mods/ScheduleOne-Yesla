@@ -187,6 +187,11 @@ namespace Yesla.Phone
             var j = new Json().Open();
             j.Prop("image", MapPicture.Ready);
             j.Prop("imageName", MapPicture.ImageName);
+            j.Prop("mapMetres", MapGeo.Metres());
+            j.Key("sheets").OpenArray();
+            foreach (var sh in MapPicture.Sheets)
+                j.Open().Prop("src", sh.Image).Prop("x", sh.X).Prop("y", sh.Y).Prop("w", sh.W).Prop("h", sh.H).Prop("rot", sh.Rotation).Close();
+            j.CloseArray();
 
             Player local = Player.Local;
             if (local != null && MapGeo.TryNormalise(local.transform.position, out double px, out double py))
@@ -387,6 +392,7 @@ namespace Yesla.Phone
             {
                 int h = 17;
                 h = h * 31 + (MapPicture.Ready ? 1 : 0);
+                h = h * 31 + MapPicture.Revision;
                 Player local = Player.Local;
                 if (local != null)
                 {
