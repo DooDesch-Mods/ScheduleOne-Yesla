@@ -42,6 +42,7 @@ var full = false;
 var plateDraft = null;   // what the player typed into the plate field, null while untouched
 var shownPicture = '';
 var viewsKey = '', viewEls = [], shownView = -1;
+var sheetsKey = '';
 
 var tx = 0, ty = 0, zoom = ZOOM_START;
 
@@ -750,7 +751,30 @@ function resetPlate() {
 
 // ---- wiring ----------------------------------------------------------------------------------------------------
 
+// The pictures the map app lays over its background, a map expansion's sheets at their own resolution, so the map
+// is as sharp as in the map app. Rebuilt only when the mod publishes them again.
+function renderSheets() {
+  var list = state.sheets || [];
+  var key = state.image + '|' + list.map(function (s) { return s.src + '@' + s.x + ',' + s.y + ',' + s.w + ',' + s.rot; }).join(';');
+  if (key === sheetsKey) return;
+  sheetsKey = key;
+  var box = $('sheets');
+  box.replaceChildren();
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    var w = s.w * WORLD, h = s.h * WORLD;
+    var img = document.createElement('img');
+    img.className = 'sheet';
+    img.setAttribute('src', 's1://' + s.src);
+    img.setAttribute('style', 'left: ' + (s.x * WORLD - w / 2).toFixed(1) + 'px; top: ' + (s.y * WORLD - h / 2).toFixed(1) + 'px; width: ' +
+      w.toFixed(1) + 'px; height: ' + h.toFixed(1) + 'px; transform: rotate(' + Math.round(s.rot) + 'deg);');
+    box.appendChild(img);
+  }
+  s1.log('map sheets shown: ' + list.length);
+}
+
 function renderAll() {
+  renderSheets();
   renderRoute();
   renderMarks();
   renderCar();
