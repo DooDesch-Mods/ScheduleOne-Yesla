@@ -8,7 +8,7 @@
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 [![Polyfill](https://polyfill.doomods.com/badge/yesla.svg)](https://polyfill.doomods.com/mod/yesla)
 
-[![MLVScan Yesla.dll](https://mlvscan.com/attestations/att_NbMa80yQ2Yyug-q6o6Jcf2eK/badge.svg)](https://mlvscan.com/attestations/att_NbMa80yQ2Yyug-q6o6Jcf2eK)
+[![MLVScan Yesla.dll](https://mlvscan.com/attestations/att_BfpBQiV3ZfHAtQERosLhesd9/badge.svg)](https://mlvscan.com/attestations/att_BfpBQiV3ZfHAtQERosLhesd9)
 
 ![Yesla Assisted Driving](https://raw.githubusercontent.com/DooDesch-Mods/ScheduleOne-Yesla/main/docs/img/header.jpg)
 
