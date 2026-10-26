@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.2] - 2026-10-27
+
+### Fixed
+- The Drive tab follows a phone map that another mod has widened, as sharp as the vanilla map, and Assisted Driving drives there.
+
 ## [1.1.1] - 2026-10-22
 
 ### Changed
