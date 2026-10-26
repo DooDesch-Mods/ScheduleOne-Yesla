@@ -187,6 +187,7 @@ namespace Yesla.Phone
             var j = new Json().Open();
             j.Prop("image", MapPicture.Ready);
             j.Prop("imageName", MapPicture.ImageName);
+            j.Prop("mapMetres", MapGeo.Metres());
 
             Player local = Player.Local;
             if (local != null && MapGeo.TryNormalise(local.transform.position, out double px, out double py))

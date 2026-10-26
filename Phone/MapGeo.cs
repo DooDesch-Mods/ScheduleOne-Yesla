@@ -45,6 +45,10 @@ namespace Yesla.Phone
             return true;
         }
 
+        /// <summary>The width of the map picture in metres, 0 while the map is not there.</summary>
+        internal static double Metres() =>
+            TryFrame(out _, out float size, out float factor) ? size / factor : 0;
+
         private static bool TryFrame(out MapPositionUtility util, out float size, out float factor)
         {
             util = null;
