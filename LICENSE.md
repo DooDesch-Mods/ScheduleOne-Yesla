@@ -45,7 +45,7 @@ This permission stays valid when DooDesch publishes a release again later.
 ## Compiled files
 
 The compiled files are for running the Software and for compiling against its API. To read the code, use
-the source code in the source repository. DooDesch never permits reading the code from the compiled files.
+the source code in the source repository. Apart from the review under "Review by release channels", DooDesch does not permit reading the code from the compiled files.
 
 You are responsible for what an AI agent or another automated tool does on your behalf with the Software.
 
@@ -53,6 +53,14 @@ Acts that the law permits without the consent of the rights holder stay permitte
 makes them mandatory. In the EU this covers Articles 5(3) and 6 of Directive 2009/24/EC, in Germany
 §§ 69d(3) and 69e UrhG. The information needed for interoperability is in the source code. To fix an error, report it at
 https://support.doodesch.de/yesla or change the source code under "You may" item 4.
+
+## Review by release channels
+
+Thunderstore and Nexus Mods, and the people they appoint to moderate packages, may download, decompile,
+disassemble, scan and inspect the compiled files and the source code of every release that DooDesch
+uploads there, also with automated tools, to check it for safety and for compliance with their rules.
+They may keep the copies they need for that, and they may host, list and distribute those release
+packages. "You may not" item 5 and the section "Compiled files" do not limit this.
 
 ## Text and data mining
 
