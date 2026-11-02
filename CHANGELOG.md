@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3] - 2026-11-02
+
+### Changed
+
+- The Yesla phone app has a new icon: a plain Y.
+- Decompiling is not permitted, except for the package review by Thunderstore and Nexus Mods. The source is on GitHub.
+
 ## [1.1.2] - 2026-10-27
 
 ### Fixed
