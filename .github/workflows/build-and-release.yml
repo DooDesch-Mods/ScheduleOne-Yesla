@@ -327,6 +327,7 @@ jobs:
           generate_release_notes: true
           files: |
             release/Yesla.dll
+            Yesla_${{ needs.build.outputs.version }}.zip
             release/LICENSE-MODEL.txt
             release/THIRD-PARTY-NOTICES.md
             Yesla_${{ needs.build.outputs.version }}_debug.zip
