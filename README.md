@@ -4,13 +4,11 @@
 
 **Download:** [Nexus Mods](https://www.nexusmods.com/schedule1/mods/2880) · [Thunderstore](https://thunderstore.io/c/schedule-i/p/DooDesch/Yesla/) · [GitHub Releases](https://github.com/DooDesch-Mods/ScheduleOne-Yesla/releases)
 
-[![Discord](https://mods.doodesch.de/img/badge.svg)](https://mods.doodesch.de)
-
 ![Version](https://img.shields.io/badge/version-1.1.2-blue)
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
-[![Polyfill](https://polyfill.doomods.com/badge/yesla.svg)](https://polyfill.doomods.com/mod/yesla)
+[![Discord](https://mods.doodesch.de/img/badge.svg)](https://mods.doodesch.de) [![Polyfill](https://polyfill.doomods.com/badge/yesla.svg)](https://polyfill.doomods.com/mod/yesla)
 
 [![MLVScan Yesla.dll](https://mlvscan.com/attestations/att_WZ_edxZsa9keEM-ldcO-gy7t/badge.svg)](https://mlvscan.com/attestations/att_WZ_edxZsa9keEM-ldcO-gy7t)
 
