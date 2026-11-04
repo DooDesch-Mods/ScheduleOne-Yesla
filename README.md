@@ -4,6 +4,8 @@
 
 **Download:** [Nexus Mods](https://www.nexusmods.com/schedule1/mods/2880) · [Thunderstore](https://thunderstore.io/c/schedule-i/p/DooDesch/Yesla/) · [GitHub Releases](https://github.com/DooDesch-Mods/ScheduleOne-Yesla/releases)
 
+[![Discord](https://mods.doodesch.de/img/badge.svg)](https://mods.doodesch.de)
+
 ![Version](https://img.shields.io/badge/version-1.1.2-blue)
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
@@ -105,6 +107,12 @@ code. Sell or leave the car before you remove the mod.
 - [Chassis](https://www.nexusmods.com/schedule1/mods/2918) 1.6.0 or newer
 - [Sideload](https://www.nexusmods.com/schedule1/mods/2360) 1.33.6 or newer for the phone app
   (optional - without it everything but the app works)
+
+## Community
+
+[![DooDesch Mods on Discord](https://mods.doodesch.de/img/card.svg)](https://mods.doodesch.de)
+
+Join the DooDesch Mods Discord: update pings, polls on what comes next, and playtests of new mods.
 
 ## Credits
 
