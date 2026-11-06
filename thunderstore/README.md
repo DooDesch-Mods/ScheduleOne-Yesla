@@ -2,6 +2,10 @@
 
 > 🛟 **Need help or found a bug?** Get support at [support.doodesch.de/yesla](https://support.doodesch.de/yesla).
 
+> ⚠️ **A required mod is missing on Thunderstore?** Thunderstore sometimes takes one of my library mods off its listing, and then r2modman and Gale can't install it. Get it from Nexus Mods or GitHub instead and put the DLL into the `Mods` folder of your profile. Stuck? Ask in the [Discord](https://mods.doodesch.de).
+>
+> - **Chassis:** [Nexus Mods](https://www.nexusmods.com/schedule1/mods/2918) · [GitHub](https://github.com/DooDesch-Mods/ScheduleOne-Chassis/releases/latest)
+
 ![Version](https://img.shields.io/badge/version-1.1.2-blue)
 ![Game](https://img.shields.io/badge/game-Schedule%20I-purple)
 ![MelonLoader](https://img.shields.io/badge/MelonLoader-0.7.3+-green)
